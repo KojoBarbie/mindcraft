@@ -28,4 +28,13 @@ export default [
       "no-floating-promise/no-floating-promise": "error", // Disallow Promises without error handling or awaiting
     },
   },
+
+  // New code in this fork runs on Node, not in the browser.
+  {
+    files: ["src/decision/**/*.js", "test/**/*.js", "scripts/**/*.js"],
+    languageOptions: {
+      globals: globals.node,
+      ecmaVersion: 2022,
+    },
+  },
 ];
