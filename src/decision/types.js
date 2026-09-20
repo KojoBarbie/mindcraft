@@ -59,12 +59,13 @@
  * @typedef {object} DecisionRequest
  * @property {unknown} state JSON-serialisable context; keep it small, providers bill by input size
  * @property {Question[]} questions
- * @property {AbortSignal} [signal] aborted when the caller stops waiting (timeout); providers should honour it
+ * @property {AbortSignal} [signal] aborted on timeout or when the caller cancels; providers should pass it to fetch
  */
 
 /**
  * @typedef {object} DecisionResponse
- * @property {Record<string, Answer>} answers keyed by question id; one per question
+ * @property {Record<string, Answer>} answers keyed by question id; one per question. `confidence` may be left
+ *   undefined by a provider; the resilient wrapper normalises it to null
  * @property {number | null} [inputTokens] as reported by the provider
  */
 

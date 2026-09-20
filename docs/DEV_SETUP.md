@@ -90,8 +90,10 @@ the world instead of depending on the terrain.
 
 Separate from the chat models in `src/models/`. A decision provider answers typed questions about a state
 (`choice` / `score` / `noul` = yes-no probability) and never writes free text; see `src/decision/types.js`.
-Providers stay thin. `resilient()` adds answer validation, a per-attempt timeout, retries with backoff for
-retryable errors (429 / 5xx / timeouts / network), and fallback to the next provider in the chain.
+Providers stay thin. `resilient()` adds answer validation, a per-attempt timeout and an overall deadline,
+retries with backoff for retryable errors (429 / 5xx / timeouts / network; `Retry-After` is honoured), fallback
+to the next provider in the chain, and cancellation through `request.signal`. Errors marked `fatal` (malformed
+questions, a cancelled request, a broken mock policy) are rethrown at once instead of falling back.
 
 A profile selects providers with `decision_model` (a name, an object with options, or an array in fallback
 order) and tunes the wrapper with `decision_options`. `"decision_model": "mock"` needs no API key: it

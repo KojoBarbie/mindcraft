@@ -12,6 +12,16 @@ const isProbability = n => typeof n === 'number' && n >= 0 && n <= 1;
  * @param {Question[]} questions
  */
 export function validateQuestions(questions) {
+    try {
+        checkQuestions(questions);
+    } catch (error) {
+        if (error instanceof DecisionError) error.fatal = true; // a bug in the caller; no provider can fix it
+        throw error;
+    }
+}
+
+/** @param {Question[]} questions */
+function checkQuestions(questions) {
     if (!Array.isArray(questions) || questions.length === 0)
         throw new DecisionError('A decision request needs at least one question.');
     const ids = new Set();
@@ -58,16 +68,21 @@ export function validateAnswers(questions, answers) {
         if (!a) throw new DecisionError(`Provider did not answer question "${q.id}".`);
         if (a.type !== q.type)
             throw new DecisionError(`Answer to "${q.id}" has type "${a.type}", expected "${q.type}".`);
-        if (a.confidence !== null && !isProbability(a.confidence))
+        if (a.confidence !== null && a.confidence !== undefined && !isProbability(a.confidence))
             throw new DecisionError(`Answer to "${q.id}" has an invalid confidence.`);
         if (q.type === 'choice' && a.type === 'choice') {
             if (!q.options.includes(a.value))
                 throw new DecisionError(`Answer to "${q.id}" is "${a.value}", which is not one of the options.`);
             if (a.distribution) {
+                let total = 0;
                 for (const [option, p] of Object.entries(a.distribution)) {
                     if (!q.options.includes(option) || !isProbability(p))
                         throw new DecisionError(`Answer to "${q.id}" has an invalid distribution.`);
+                    total += p;
                 }
+                // may be partial (top-k only), so it can sum to less than 1, but it must cover the chosen value
+                if (total > 1 + 1e-6 || !(a.value in a.distribution))
+                    throw new DecisionError(`Answer to "${q.id}" has a distribution that does not fit its value.`);
             }
         } else if (q.type === 'score' && a.type === 'score') {
             if (!Number.isFinite(a.value) || a.value < q.min || a.value > q.max)

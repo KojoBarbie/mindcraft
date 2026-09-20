@@ -70,17 +70,41 @@ test('registry builds providers from specs', () => {
 test('a profile without decision_model yields null; with one, a working chain in fallback order', async () => {
     assert.equal(createDecisionProviderFromProfile({}), null);
 
-    registerDecisionProvider('always_down', () => ({
+    const unregister = registerDecisionProvider('always_down', () => ({
         name: 'always_down',
         decide: () => Promise.reject(DecisionError.fromHttpStatus(401, 'no key')),
     }));
-    const chain = createDecisionProviderFromProfile({
-        decision_model: ['always_down', { provider: 'mock', seed: 1 }],
-        decision_options: { retries: 0 },
-    });
-    assert.ok(chain);
-    assert.equal(chain.name, 'always_down > mock');
-    const result = await chain.decide({ state: {}, questions });
-    assert.equal(result.provider, 'mock');
-    assert.equal(result.attempts, 2);
+    try {
+        const chain = createDecisionProviderFromProfile({
+            decision_model: ['always_down', { provider: 'mock', seed: 1 }],
+            decision_options: { retries: 0 },
+        });
+        assert.ok(chain);
+        assert.equal(chain.name, 'always_down > mock');
+        const result = await chain.decide({ state: {}, questions });
+        assert.equal(result.provider, 'mock');
+        assert.equal(result.attempts, 2);
+    } finally {
+        unregister();
+    }
+    assert.throws(() => createDecisionProvider('always_down'), /Unknown decision provider/);
+});
+
+test('registering a taken name throws, and prototype names are not providers', () => {
+    assert.throws(() => registerDecisionProvider('mock', () => createMockProvider()), /already registered/);
+    for (const name of ['constructor', 'toString', '__proto__'])
+        assert.throws(() => createDecisionProvider(name), /Unknown decision provider/, name);
+});
+
+test('a policy that returns an unusable value fails loudly instead of being ignored', async () => {
+    /** @type {[string, any][]} */
+    const cases = [['skill', 'fly'], ['skill', 3], ['risk', 99], ['risk', 'high'], ['flee', 1.2], ['flee', 'yes']];
+    for (const [id, value] of cases) {
+        const provider = createMockProvider({ policy: (_state, q) => (q.id === id ? value : undefined) });
+        await assert.rejects(
+            provider.decide({ state: {}, questions }),
+            error => error instanceof DecisionError && error.fatal === true,
+            `${id}=${value}`,
+        );
+    }
 });

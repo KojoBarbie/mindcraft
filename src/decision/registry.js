@@ -10,18 +10,26 @@ import { resilient } from './resilient.js';
  * @typedef {string | ({provider: string} & Record<string, unknown>)} ProviderSpec
  */
 
-/** @type {Record<string, (options: Record<string, unknown>) => DecisionProvider>} */
-const factories = {
-    mock: options => createMockProvider(options),
-};
+/** @typedef {(options: Record<string, unknown>) => DecisionProvider} ProviderFactory */
+
+// A Map, not an object: a profile saying "constructor" must not resolve to Object.prototype.constructor.
+/** @type {Map<string, ProviderFactory>} */
+const factories = new Map([['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))]]);
 
 /**
- * Make a provider available under a name (used by provider modules and tests).
+ * Make a provider available under a name. Registering a name twice is almost always a mistake (two modules
+ * fighting over it), so it throws; the returned function removes the registration again (for tests).
+ *
+ * Every agent builds its own provider instances. State that must be shared between agents in one process,
+ * such as a rate limiter for one API key, belongs in the provider module's scope, not here.
  * @param {string} name
- * @param {(options: Record<string, unknown>) => DecisionProvider} factory
+ * @param {ProviderFactory} factory
+ * @returns {() => void} unregister
  */
 export function registerDecisionProvider(name, factory) {
-    factories[name] = factory;
+    if (factories.has(name)) throw new DecisionError(`Decision provider "${name}" is already registered.`, { fatal: true });
+    factories.set(name, factory);
+    return () => { factories.delete(name); };
 }
 
 /**
@@ -30,9 +38,9 @@ export function registerDecisionProvider(name, factory) {
  */
 export function createDecisionProvider(spec) {
     const { provider: name, ...options } = typeof spec === 'string' ? { provider: spec } : spec;
-    const factory = factories[name];
+    const factory = factories.get(name);
     if (!factory)
-        throw new DecisionError(`Unknown decision provider "${name}". Known: ${Object.keys(factories).join(', ')}.`);
+        throw new DecisionError(`Unknown decision provider "${name}". Known: ${[...factories.keys()].join(', ')}.`, { fatal: true });
     return factory(options);
 }
 
@@ -42,7 +50,7 @@ export function createDecisionProvider(spec) {
  *   "decision_model": "mock"
  *   "decision_model": {"provider": "mock", "seed": 7}
  *   "decision_model": ["jev", {"provider": "ollama", "model": "qwen3:4b"}]   // fallback order
- *   "decision_options": {"timeoutMs": 2000, "retries": 1}
+ *   "decision_options": {"timeoutMs": 2000, "deadlineMs": 4000, "retries": 1}
  *
  * @param {{decision_model?: ProviderSpec | ProviderSpec[], decision_options?: import('./resilient.js').ResilienceOptions}} profile
  * @returns {ReturnType<typeof resilient> | null} null when the profile does not configure a decision model
@@ -50,5 +58,5 @@ export function createDecisionProvider(spec) {
 export function createDecisionProviderFromProfile(profile) {
     if (profile.decision_model === undefined || profile.decision_model === null) return null;
     const specs = Array.isArray(profile.decision_model) ? profile.decision_model : [profile.decision_model];
-    return resilient(specs.map(createDecisionProvider), profile.decision_options);
+    return resilient(specs.map(spec => createDecisionProvider(spec)), profile.decision_options);
 }

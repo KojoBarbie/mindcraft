@@ -50,12 +50,31 @@ test('missing, mistyped, out-of-range and contradictory answers are rejected', (
         ['NaN score', a => { a.risk.value = NaN; }],
         ['bad confidence', a => { a.skill.confidence = 1.5; }],
         ['bad distribution key', a => { a.skill.distribution = { fly: 1 }; }],
+        ['distribution without the chosen value', a => { a.skill.distribution = { craft: 0.2 }; }],
+        ['distribution over 1', a => { a.skill.distribution = { mine: 0.8, craft: 0.8 }; }],
+        ['infinite score', a => { a.risk.value = Infinity; }],
         ['contradiction', a => { a.flee = { type: 'noul', value: true, probability: 0.1, confidence: 0.9 }; }],
     ];
     for (const [label, mutate] of mutations) {
         const answers = goodAnswers();
         mutate(answers);
         assert.throws(() => validateAnswers(questions, answers), DecisionError, label);
+    }
+});
+
+test('a partial (top-k) distribution and an omitted confidence are accepted', () => {
+    const answers = goodAnswers();
+    answers.skill = /** @type {any} */ ({ type: 'choice', value: 'mine', distribution: { mine: 0.6 } });
+    validateAnswers(questions, answers);
+});
+
+test('malformed questions are fatal: no provider can fix them', () => {
+    try {
+        validateQuestions([]);
+        assert.fail('should have thrown');
+    } catch (error) {
+        assert.ok(error instanceof DecisionError);
+        assert.equal(error.fatal, true);
     }
 });
 

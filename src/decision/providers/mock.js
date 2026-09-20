@@ -1,4 +1,5 @@
 // @ts-check
+import { DecisionError } from '../errors.js';
 
 /** @typedef {import('../types.js').DecisionProvider} DecisionProvider */
 /** @typedef {import('../types.js').Question} Question */
@@ -50,8 +51,14 @@ export function createMockProvider(options = {}) {
      */
     function answer(state, q) {
         const ruled = options.policy?.(state, q);
+        // A policy that returns something unusable is a bug in the policy. Fail loudly (fatal: no fallback),
+        // otherwise the rule would be dropped silently and a later provider would answer instead.
+        /** @param {string} problem */
+        const bad = problem => new DecisionError(`Mock policy returned ${JSON.stringify(ruled)} for "${q.id}": ${problem}`, { fatal: true });
         switch (q.type) {
             case 'choice': {
+                if (ruled !== undefined && (typeof ruled !== 'string' || !q.options.includes(ruled)))
+                    throw bad('expected one of the options or undefined');
                 if (typeof ruled === 'string')
                     return { type: 'choice', value: ruled, confidence: 1, distribution: { [ruled]: 1 } };
                 const p = 1 / q.options.length;
@@ -64,10 +71,14 @@ export function createMockProvider(options = {}) {
                 };
             }
             case 'score': {
+                if (ruled !== undefined && (typeof ruled !== 'number' || !(ruled >= q.min && ruled <= q.max)))
+                    throw bad(`expected a number in [${q.min}, ${q.max}] or undefined`);
                 if (typeof ruled === 'number') return { type: 'score', value: ruled, confidence: 1 };
                 return { type: 'score', value: q.min + random() * (q.max - q.min), confidence: 0 };
             }
             case 'noul': {
+                if (ruled !== undefined && (typeof ruled !== 'number' || !(ruled >= 0 && ruled <= 1)))
+                    throw bad('expected a probability in [0, 1] or undefined');
                 const probability = typeof ruled === 'number' ? ruled : random();
                 return {
                     type: 'noul',
@@ -82,6 +93,7 @@ export function createMockProvider(options = {}) {
     return {
         name: 'mock',
         async decide({ state, questions, signal }) {
+            if (signal?.aborted) throw new Error('aborted');
             if (latencyMs > 0) {
                 await new Promise((resolve, reject) => {
                     const timer = setTimeout(resolve, latencyMs);
