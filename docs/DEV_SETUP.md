@@ -50,6 +50,21 @@ Run a console command on the server (e.g. to op yourself or set the time):
 docker compose -f docker-compose.dev.yml exec minecraft rcon-cli time set day
 ```
 
+## Tests, lint, typecheck
+
+```bash
+npm test            # node --test, files under test/**/*.test.js
+npm run lint        # ESLint
+npm run typecheck   # tsc --noEmit over // @ts-check files
+```
+
+Lint and typecheck only cover the code this fork adds (`src/decision`, `test`, `scripts`). Upstream code has
+a few hundred ESLint errors; fixing them here would make every upstream merge conflict.
+
+Unit tests must not import modules that load native dependencies (`canvas`, `gl`, `prismarine-viewer`): CI
+installs with `--ignore-scripts`, so those are not built there. Anything that needs a live bot belongs in an
+integration test against the dev server, not in `npm test`.
+
 ## Conventions for new code
 
 - New code for the decision layer lives in `src/decision/`. Keep edits to existing upstream files minimal

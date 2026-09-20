@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Skip install scripts so the gl/canvas native builds are not needed; unit tests must not import them.
+      - run: npm ci --ignore-scripts
+      - run: npx patch-package
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
