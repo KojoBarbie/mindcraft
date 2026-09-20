@@ -1,5 +1,6 @@
 // @ts-check
 import { estimateTokens } from './tokens.js';
+import { ARMOR, FOOD, HAZARD_BLOCK, MATERIAL, RARE_RESOURCE_BLOCK, COMMON_RESOURCE_BLOCKS, STATION, TOOL, namesIn } from './interest.js';
 // Turns a Snapshot into the small JSON object a decision model sees. Decision models bill by input size and
 // answer faster on less, and the loop asks about once a second, so this is the main cost lever: the target is
 // a few hundred tokens, not a few thousand. English keys only; models are strongest there.
@@ -23,16 +24,6 @@ import { estimateTokens } from './tokens.js';
  *   step, least important first, so a crowded moment can never blow up the cost of a decision.
  */
 
-const TOOL = /_(pickaxe|axe|shovel|hoe|sword)$|^(bow|crossbow|shield|shears|flint_and_steel|bucket|water_bucket|fishing_rod)$/;
-const ARMOR = /_(helmet|chestplate|leggings|boots)$/;
-const FOOD = /^(bread|apple|golden_apple|carrot|potato|baked_potato|beetroot|melon_slice|sweet_berries|cookie|pumpkin_pie|dried_kelp|mushroom_stew|rabbit_stew|beetroot_soup)$|^cooked_|^(beef|porkchop|mutton|chicken|rabbit|cod|salmon)$/;
-const STATION = /^(crafting_table|furnace|blast_furnace|smoker|chest|barrel|anvil|smithing_table|enchanting_table|brewing_stand)$|_bed$/;
-const MATERIAL = /_(log|planks|ingot)$|^(stick|cobblestone|coal|charcoal|diamond|raw_iron|raw_gold|raw_copper|redstone|lapis_lazuli|emerald|flint|string|leather|torch)$/;
-
-// Block types worth telling a model about. Most of the 100+ types in range are scenery.
-const RESOURCE_BLOCK = /_ore$|_log$|^(stone|cobblestone|deepslate|sand|gravel|clay|obsidian|ancient_debris|sugar_cane|bamboo|pumpkin|melon|wheat|carrots|potatoes|beetroots|sweet_berry_bush|cactus)$/;
-const HAZARD_BLOCK = /^(lava|fire|magma_block|powder_snow|sweet_berry_bush|cactus)$/;
-
 /** @param {number} timeOfDay */
 function dayPhase(timeOfDay) {
     if (timeOfDay < 12000) return 'day';
@@ -42,24 +33,15 @@ function dayPhase(timeOfDay) {
 }
 
 /**
- * The item and block names a goal talks about. Whole identifiers only: "have diamond_pickaxe" is about
- * diamond_pickaxe, not about diamond.
- * @param {string} goal
- * @returns {Set<string>}
- */
-function namesIn(goal) {
-    return new Set(goal.toLowerCase().match(/[a-z][a-z0-9_]*/g) ?? []);
-}
-
-/**
  * How much a name matters for deciding, higher first. Names that appear in the goal always win.
  * @param {string} name
  * @param {Set<string>} goal
+ * @param {Set<string> | null} foods edible names according to the game; null = unknown, fall back to a pattern
  */
-function itemPriority(name, goal) {
+function itemPriority(name, goal, foods) {
     if (goal.has(name)) return 6;
     if (TOOL.test(name)) return 5;
-    if (FOOD.test(name)) return 4;
+    if (foods ? foods.has(name) : FOOD.test(name)) return 4;
     if (ARMOR.test(name)) return 3;
     if (STATION.test(name)) return 2;
     if (MATERIAL.test(name)) return 1;
@@ -83,8 +65,15 @@ export function compressState(snapshot, options = {}) {
         { maxAnimals: 0, noteLength: 0, maxInventory: 4, maxBlocks: 3, maxRecent: 0, maxPlayers: 1, maxMobTypes: 2 },
     ];
     for (const limits of steps) {
-        if (estimateTokens(state) <= maxTokens) break;
+        if (estimateTokens(state) <= maxTokens) return state;
         state = build(snapshot, { ...options, ...limits });
+    }
+    // Still over: free text is the only thing left that can be arbitrarily long. Cut it, then drop whole
+    // sections, least important first. What remains (hp, food, time, threats) is always tiny.
+    if (estimateTokens(state) > maxTokens && typeof state.goal === 'string') state.goal = state.goal.slice(0, 80);
+    for (const key of ['last', 'animals', 'blocks', 'inv', 'players', 'armor', 'goal', 'hazards', 'mobs']) {
+        if (estimateTokens(state) <= maxTokens) break;
+        delete state[key];
     }
     return state;
 }
@@ -105,6 +94,7 @@ function build(snapshot, options) {
     const maxRecent = options.maxRecent ?? 3;
     const goalText = snapshot.goal ?? '';
     const goal = namesIn(goalText);
+    const foods = snapshot.foodItems ? new Set(snapshot.foodItems) : null;
 
     /** @type {Record<string, unknown>} */
     const state = {
@@ -115,15 +105,20 @@ function build(snapshot, options) {
     if (snapshot.dimension !== 'overworld') state.dim = snapshot.dimension.replace(/^the_/, '');
     if (snapshot.raining) state.rain = true;
     if (view !== 'crafting') state.pos = [snapshot.pos.x, snapshot.pos.y, snapshot.pos.z].map(Math.round);
+    if (snapshot.inWater) state.in_water = true;
+    // only under water: mineflayer's oxygenLevel is not reliable on land (observed 9 while standing in the open)
+    if (snapshot.inWater && snapshot.oxygen !== undefined && snapshot.oxygen < 20) state.air = Math.round(snapshot.oxygen);
     if (snapshot.heldItem) state.hand = snapshot.heldItem;
+    if (typeof snapshot.heldDurability === 'number' && snapshot.heldDurability < 0.1) state.hand_worn = true; // about to break
+    if (snapshot.offhand) state.offhand = snapshot.offhand;
     if (snapshot.armor.length > 0) state.armor = snapshot.armor;
 
     // Inventory: the most decision-relevant types by name, the rest as a count.
     const items = Object.entries(snapshot.inventory)
         .filter(([, count]) => count > 0)
-        .filter(([name]) => view !== 'combat' || itemPriority(name, goal) >= 3) // gear and food only
+        .filter(([name]) => view !== 'combat' || itemPriority(name, goal, foods) >= 3) // gear and food only
         .sort(([a, countA], [b, countB]) =>
-            itemPriority(b, goal) - itemPriority(a, goal) || countB - countA || a.localeCompare(b));
+            itemPriority(b, goal, foods) - itemPriority(a, goal, foods) || countB - countA || a.localeCompare(b));
     if (items.length > 0) {
         state.inv = Object.fromEntries(items.slice(0, maxInventory));
         if (items.length > maxInventory && view !== 'combat') state.inv_more = items.length - maxInventory;
@@ -163,20 +158,24 @@ function build(snapshot, options) {
         const closest = Object.entries(players).sort(([, a], [, b]) => a - b);
         state.players = Object.fromEntries(closest.slice(0, maxPlayers));
     }
-    if (view === 'tactical' && maxAnimals > 0 && Object.keys(animals).length > 0) {
+    // Animals are food on legs; they only matter to a decision when food is short.
+    const hasFood = Object.keys(snapshot.inventory).some(name => (foods ? foods.has(name) : FOOD.test(name)));
+    if (view === 'tactical' && maxAnimals > 0 && (!hasFood || snapshot.food <= 14) && Object.keys(animals).length > 0) {
         const closest = Object.entries(animals).sort(([, a], [, b]) => a - b).slice(0, maxAnimals);
         state.animals = Object.fromEntries(closest);
     }
 
-    // Blocks: nearest distance per useful type. Hazards always; resources unless fighting.
+    // Hazards always, with relative height: lava 3 blocks away matters very differently below the feet or level.
+    const hazards = snapshot.blocks.filter(block => HAZARD_BLOCK.test(block.name)).sort((a, b) => a.dist - b.dist).slice(0, 3);
+    if (hazards.length > 0)
+        state.hazards = Object.fromEntries(hazards.map(block => [block.name, { d: Math.round(block.dist), dy: Math.round(block.dy) }]));
+
+    // Blocks: nearest distance per useful type. Resources unless fighting; only workstations when crafting.
+    const isResource = (/** @type {string} */ name) => RARE_RESOURCE_BLOCK.test(name) || COMMON_RESOURCE_BLOCKS.includes(name);
     const blocks = snapshot.blocks
-        .filter(block => HAZARD_BLOCK.test(block.name) || STATION.test(block.name) || goal.has(block.name)
-            || (view !== 'combat' && RESOURCE_BLOCK.test(block.name)))
-        .filter(block => view !== 'crafting' || STATION.test(block.name) || goal.has(block.name))
-        .sort((a, b) =>
-            Number(goal.has(b.name)) - Number(goal.has(a.name))
-            || Number(HAZARD_BLOCK.test(b.name)) - Number(HAZARD_BLOCK.test(a.name))
-            || a.dist - b.dist)
+        .filter(block => !HAZARD_BLOCK.test(block.name))
+        .filter(block => STATION.test(block.name) || goal.has(block.name) || (view === 'tactical' && isResource(block.name)))
+        .sort((a, b) => Number(goal.has(b.name)) - Number(goal.has(a.name)) || a.dist - b.dist)
         .slice(0, maxBlocks);
     if (blocks.length > 0) state.blocks = Object.fromEntries(blocks.map(block => [block.name, Math.round(block.dist)]));
 
@@ -184,7 +183,7 @@ function build(snapshot, options) {
     if (goalText) state.goal = goalText;
     if (view !== 'combat' && maxRecent > 0 && snapshot.recent.length > 0) {
         state.last = snapshot.recent.slice(-maxRecent).map(action =>
-            (action.ok ? `ok ${action.cmd}` : `FAIL ${action.cmd}${action.note && noteLength > 0 ? `: ${action.note.slice(0, noteLength)}` : ''}`));
+            (action.ok ? `ok ${action.cmd.slice(0, 60)}` : `FAIL ${action.cmd.slice(0, 60)}${action.note && noteLength > 0 ? `: ${action.note.slice(0, noteLength)}` : ''}`));
     }
     return state;
 }

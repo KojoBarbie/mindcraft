@@ -19,6 +19,9 @@ await new Promise((resolve, reject) => {
 });
 await sleep(3000); // let chunks and entities arrive
 
+/** Remove what this script summoned. Relative to the bot: a bare RCON selector is relative to world spawn. */
+const cleanMobs = () => rcon(`execute at ${NAME} run kill @e[type=!minecraft:player,type=!minecraft:item_frame,distance=..48]`);
+
 /** @type {{scenario: string, view: string, tokens: number, raw: number}[]} */
 const rows = [];
 /** @param {string} scenario @param {import('../src/decision/snapshot.js').SnapshotExtras} extras */
@@ -52,7 +55,7 @@ try {
         action: { name: 'attack', elapsedMs: 5200 },
         recent: [{ cmd: '!attack("zombie")', ok: true }, { cmd: '!goToPlayer("tomo", 3)', ok: false, note: 'Timeout: took too long to decide path to goal' }],
     });
-    await rcon('kill @e[type=!minecraft:player,distance=..64]');
+    await cleanMobs();
 
     const items = ['diamond_pickaxe', 'iron_axe', 'iron_shovel', 'shield', 'bow', 'water_bucket', 'bread 32', 'cooked_porkchop 16',
         'cobblestone 64', 'oak_log 64', 'oak_planks 64', 'stick 64', 'coal 40', 'raw_iron 23', 'iron_ingot 12', 'diamond 3',
@@ -67,7 +70,10 @@ try {
         recent: [{ cmd: '!craftRecipe("iron_pickaxe", 1)', ok: true }, { cmd: '!smeltItem("raw_iron", 8)', ok: true }, { cmd: '!collectBlocks("diamond_ore", 3)', ok: false, note: 'no diamond_ore nearby' }],
     });
 } finally {
-    await rcon(`clear ${NAME}`).catch(() => {});
+    // leave the world as we found it, even if a step above threw
+    for (const command of [`clear ${NAME}`, `effect clear ${NAME}`, 'time set day'])
+        await rcon(command).catch(() => {});
+    await cleanMobs().catch(() => {});
     bot.quit();
 }
 

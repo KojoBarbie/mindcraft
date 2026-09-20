@@ -13,6 +13,12 @@ test('counts letters per 4, digits per 3, and other symbols per 2', () => {
     assert.equal(estimateTokens('iron_ore'), 3);          // iron _ ore
 });
 
+test('non-ASCII text is counted pessimistically, not as cheap punctuation', () => {
+    assert.equal(estimateTokens('鉄のツルハシ'), 12);
+    assert.equal(estimateTokens('a😀b'), 4);
+    assert.ok(estimateTokens('{"goal":"鉄のツルハシを作る"}') > estimateTokens('{"goal":"make iron pickaxe"}'));
+});
+
 test('objects are measured as their JSON; whitespace is free', () => {
     assert.equal(estimateTokens({ hp: 20 }), estimateTokens('{"hp":20}'));
     assert.equal(estimateTokens('a  b\n c'), 3);

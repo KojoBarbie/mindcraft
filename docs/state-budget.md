@@ -13,9 +13,32 @@ Event-driven decisions (only when something changed, and none while no player is
 order of magnitude.
 
 `compressState()` enforces the budget: if a state is still over `maxTokens` (default 500) it sheds detail in
-steps, least important first (animals, failure notes, long inventory and block lists, then history).
+steps, least important first (animals, failure notes, long inventory and block lists, then history), and as a
+last resort cuts free text and drops whole sections, so the budget holds for any input.
 
 ## Measured on the dev server
+
+`node scripts/measure_state.js` stages three situations with RCON and measures each view. Token counts are
+from `estimateTokens()`, a dependency-free estimate that errs high for compact JSON; the provider's reported
+`inputTokens` is the ground truth once a real model is connected (#10, #15). "Uncompressed" is the raw
+snapshot (nearest block of every type in range, every entity), which is already far smaller than Mindcraft's
+prompt for a chat model.
+
+| scenario | view | tokens (est.) | uncompressed snapshot |
+|---|---|---:|---:|
+| early game, day, empty inventory | tactical | 73 | 270 |
+| early game, day, empty inventory | combat | 35 | 270 |
+| early game, day, empty inventory | crafting | 25 | 270 |
+| night, under attack | tactical | 212 | 485 |
+| night, under attack | combat | 133 | 485 |
+| night, under attack | crafting | 114 | 485 |
+| late game, inventory full | tactical | 276 | 607 |
+| late game, inventory full | combat | 118 | 607 |
+| late game, inventory full | crafting | 313 | 607 |
+
+worst case: 313 tokens (budget 500)
+
+Measured on the dev server
 
 `node scripts/measure_state.js` stages three situations with RCON and measures each view. Token counts are
 from `estimateTokens()`, a dependency-free estimate that errs high for compact JSON; the provider's reported
