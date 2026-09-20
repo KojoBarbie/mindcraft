@@ -19,8 +19,16 @@ after(async () => {
 });
 
 test('collects oak logs placed next to it, with no LLM involved', { timeout: 180_000 }, async () => {
-    // Put the logs in the world ourselves so the test does not depend on the terrain around spawn.
-    await rcon(`execute at ${harness.name} run fill ~2 ~ ~2 ~2 ~2 ~2 minecraft:oak_log`);
+    // Build the scene ourselves so the test does not depend on the terrain around spawn: a flat stone pad
+    // with clear air above it, and three separate logs on the ground. Keep them apart: with adjacent logs the
+    // pathfinder reproducibly times out on the last one ("Took to long to decide path to goal").
+    // rcon-cli exits 0 even when the command fails, so check the server's replies.
+    const at = `execute at ${harness.name} run`;
+    assert.match(await rcon(`${at} fill ~-4 ~-1 ~-4 ~4 ~-1 ~4 minecraft:stone`), /Successfully filled/);
+    await rcon(`${at} fill ~-4 ~ ~-4 ~4 ~3 ~4 minecraft:air`); // replies "No blocks were filled" if already clear
+    for (const pos of ['~3 ~ ~-3', '~3 ~ ~0', '~3 ~ ~3']) {
+        assert.match(await rcon(`${at} setblock ${pos} minecraft:oak_log`), /Changed the block/);
+    }
 
     const result = await harness.send('!collectBlocks("oak_log", 3)');
     assert.match(result, /Collected 3 oak_log/);

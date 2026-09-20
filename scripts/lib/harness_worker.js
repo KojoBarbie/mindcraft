@@ -13,16 +13,34 @@ const overrides = {
     load_memory: false,
     render_bot_view: false,
     speak: false,
+    // The harness reads results from the agent's open-chat output, so keep that stream predictable:
+    only_chat_with: [],       // otherwise replies are whispered and never reach bot-output
+    narrate_behavior: false,  // otherwise modes interleave lines like "Picking up item!"
+    chat_ingame: false,       // results still reach bot-output; this only avoids spamming server chat
     profile: { name, model: 'none' },
 };
 Object.assign(settings, overrides);
 
-// agents are child processes of this one; take them down with us
-process.on('SIGTERM', () => {
-    Mindcraft.stopAgent(name);
+// The agent is a child of this process and is restarted by Mindcraft if it dies abnormally,
+// so stop it properly and wait for it before exiting; otherwise it is orphaned.
+process.on('SIGTERM', async () => {
+    const agentProcess = Mindcraft.getAgentProcess(name);
+    const agent = agentProcess?.running ? agentProcess.process : null;
+    if (agent) {
+        const exited = new Promise(resolve => agent.once('exit', resolve));
+        Mindcraft.stopAgent(name); // SIGINT: exits without triggering a restart
+        const forceKill = setTimeout(() => agent.kill('SIGKILL'), 5_000);
+        await exited;
+        clearTimeout(forceKill);
+    }
     process.exit(0);
 });
 
 await Mindcraft.init(false, Number(port), false);
-process.send?.('ready');
-await Mindcraft.createAgent(settings);
+process.send?.({ type: 'ready' });
+
+const created = await Mindcraft.createAgent(settings);
+if (!created.success) {
+    process.send?.({ type: 'error', error: created.error });
+    process.exit(1);
+}
