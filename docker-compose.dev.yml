@@ -1,0 +1,23 @@
+# Local Paper server for development. Offline mode, so bots connect without a Microsoft account.
+# Start: MC_EULA=true docker compose -f docker-compose.dev.yml up -d
+# Setting MC_EULA=true means you accept the Minecraft EULA: https://www.minecraft.net/eula
+services:
+  minecraft:
+    image: itzg/minecraft-server:java21 # Paper 1.21.6 needs Java 21
+    environment:
+      EULA: "${MC_EULA:-false}" # the container refuses to start unless this is true
+      TYPE: PAPER
+      VERSION: "1.21.6" # version recommended by the README
+      ONLINE_MODE: "false"
+      MEMORY: 2G
+      DIFFICULTY: easy
+      SPAWN_PROTECTION: "0"
+      SEED: "mindcraft-dev" # fixed seed so runs are comparable
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: dev
+    ports:
+      - "127.0.0.1:55916:25565" # matches the default port in settings.js; not exposed to the LAN
+    volumes:
+      - ./server_data_dev:/data
+    stdin_open: true
+    tty: true
