@@ -3,9 +3,9 @@
 # Setting MC_EULA=true means you accept the Minecraft EULA: https://www.minecraft.net/eula
 services:
   minecraft:
-    image: itzg/minecraft-server
+    image: itzg/minecraft-server:java21 # Paper 1.21.6 needs Java 21
     environment:
-      EULA: "${MC_EULA:?set MC_EULA=true to accept the Minecraft EULA}"
+      EULA: "${MC_EULA:-false}" # the container refuses to start unless this is true
       TYPE: PAPER
       VERSION: "1.21.6" # version recommended by the README
       ONLINE_MODE: "false"

@@ -13,15 +13,19 @@ and the lockfile is committed.
   A throwaway shim is enough:
   ```bash
   mkdir -p /tmp/pyshim && ln -sf "$(command -v python3)" /tmp/pyshim/python
-  PATH="/tmp/pyshim:$PATH" npm install
+  PATH="/tmp/pyshim:$PATH" npm ci
   ```
 - Docker (for the local Minecraft server).
 
 ## Install
 
 ```bash
-npm install
+npm ci
 ```
+
+Use `npm ci`, not `npm install`, so the committed lockfile is what gets installed. Packages that have a
+patch in `patches/` are pinned to exact versions in `package.json`; `protodef` and `minecraft-data` are held
+by the lockfile. `npm run reinstall` wipes `node_modules` and runs `npm ci` (it keeps the lockfile).
 
 `postinstall` runs `patch-package`. All six patches in `patches/` must report ✔.
 
@@ -31,7 +35,8 @@ npm install
 seed, bound to `127.0.0.1:55916`, which is the default `port` in `settings.js`. RCON is enabled on the
 container (password `dev`) and is not published to the host.
 
-Starting the server requires accepting the [Minecraft EULA](https://www.minecraft.net/eula):
+Starting the server requires accepting the [Minecraft EULA](https://www.minecraft.net/eula). Only the start
+command needs `MC_EULA=true`; without it the container exits with an EULA error.
 
 ```bash
 MC_EULA=true npm run dev:server   # start
