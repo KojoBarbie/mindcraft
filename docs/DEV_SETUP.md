@@ -55,7 +55,7 @@ docker compose -f docker-compose.dev.yml exec minecraft rcon-cli time set day
 ```bash
 npm test            # node --test, files under test/**/*.test.js
 npm run lint        # ESLint
-npm run typecheck   # tsc --noEmit over // @ts-check files
+npm run typecheck   # tsc --noEmit; only files that start with // @ts-check are checked
 ```
 
 Lint and typecheck only cover the code this fork adds (`src/decision`, `test`, `scripts`). Upstream code has
@@ -64,6 +64,20 @@ a few hundred ESLint errors; fixing them here would make every upstream merge co
 Unit tests must not import modules that load native dependencies (`canvas`, `gl`, `prismarine-viewer`): CI
 installs with `--ignore-scripts`, so those are not built there. Anything that needs a live bot belongs in an
 integration test against the dev server, not in `npm test`.
+
+## Driving the bot without an LLM
+
+`"model": "none"` (`src/models/none.js`) is a model that generates nothing, so an agent can start with no API
+key. `scripts/lib/harness.js` starts Mindcraft with such an agent and sends it `!commands` through the
+MindServer; a command typed by a user goes straight to `executeCommand` without touching the model.
+
+```bash
+node scripts/run_command.js '!stats' '!collectBlocks("oak_log", 3)'   # HARNESS_VERBOSE=1 to see agent logs
+npm run test:integration   # needs the dev server running; not part of CI
+```
+
+`scripts/lib/rcon.js` runs server console commands (give, fill, time set, ...) so integration tests can set up
+the world instead of depending on the terrain.
 
 ## Conventions for new code
 
