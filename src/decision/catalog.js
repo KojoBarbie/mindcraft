@@ -3,7 +3,7 @@
 // targets make sense, so impossible moves never appear as options: a model cannot choose to mine iron
 // without a pickaxe if "iron_ore" is simply not on the list. Every action maps onto one of Mindcraft's
 // existing !commands (src/agent/commands/actions.js), which stays untouched.
-import { ARMOR, HAZARD_BLOCK, STATION, TOOL } from './interest.js';
+import { ARMOR, HAZARD_BLOCK, STATION, TOOL, namesIn } from './interest.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./knowledge.js').Knowledge} Knowledge */
@@ -20,12 +20,15 @@ import { ARMOR, HAZARD_BLOCK, STATION, TOOL } from './interest.js';
  * @property {string} hint one line telling the model when this is the right move
  * @property {(ctx: CatalogContext) => boolean} [possible] defaults to "has at least one target"
  * @property {(ctx: CatalogContext) => string[]} [targets] omit for actions that take no target
+ * @property {(ctx: CatalogContext, target: string) => string} [note] extra fact about a target, shown to the model
  * @property {(ctx: CatalogContext, target: string) => number[]} [quantities] omit for actions with no amount
- * @property {(target: string | undefined, quantity: number | undefined) => string} build the !command
+ * @property {(target: string | undefined, quantity: number | undefined, ctx: CatalogContext) => string} build the !command
  */
 
-/** Blocks the bot should never be offered to break. */
-const PROTECTED_BLOCK = /^(bedrock|spawner|end_portal_frame|chest|barrel|furnace|blast_furnace|smoker|crafting_table|water)$|_bed$/;
+/** Blocks the bot should never be offered to break: workstations and storage (STATION), plus these. */
+const UNBREAKABLE = /^(bedrock|spawner|end_portal_frame|water)$/;
+/** @param {string} name */
+const isProtected = name => STATION.test(name) || UNBREAKABLE.test(name);
 
 const q = JSON.stringify; // Mindcraft parses string arguments in double quotes
 
@@ -54,8 +57,13 @@ export const ACTIONS = [
         id: 'collect_blocks',
         hint: 'mine or gather a block type that is nearby',
         targets: ({ snapshot, knowledge }) => snapshot.blocks
-            .filter(b => !PROTECTED_BLOCK.test(b.name) && !HAZARD_BLOCK.test(b.name) && knowledge.canHarvest(b.name))
+            .filter(b => !isProtected(b.name) && !HAZARD_BLOCK.test(b.name) && knowledge.canHarvest(b.name))
             .sort((a, b) => a.dist - b.dist).map(b => b.name),
+        // targets are block names (that is what !collectBlocks takes); goals usually speak of items
+        note: ({ knowledge }, target) => {
+            const drops = knowledge.dropsOf(target).filter(item => item !== target);
+            return drops.length > 0 ? `gives ${drops.join(', ')}` : '';
+        },
         quantities: () => [1, 4, 16],
         build: (target, n) => `!collectBlocks(${q(target)}, ${n})`,
     },
@@ -120,16 +128,11 @@ export const ACTIONS = [
     },
     {
         id: 'give_to_player',
-        hint: 'hand an item to a nearby player',
-        possible: ({ snapshot }) => entityNames(snapshot, 'player').length > 0 && owned(snapshot).length > 0,
-        // one target string carries both the player and the item, to keep selection at three stages
-        targets: ({ snapshot }) => entityNames(snapshot, 'player').slice(0, 2)
-            .flatMap(player => owned(snapshot).slice(0, 12).map(item => `${player}:${item}`)),
-        quantities: ({ snapshot }, target) => amounts(snapshot.inventory[target.split(':')[1]] ?? 0),
-        build: (target, n) => {
-            const [player, item] = /** @type {string} */ (target).split(':');
-            return `!givePlayer(${q(player)}, ${q(item)}, ${n})`;
-        },
+        hint: 'hand an item to the nearest player',
+        possible: ({ snapshot }) => entityNames(snapshot, 'player').length > 0,
+        targets: ({ snapshot }) => owned(snapshot).sort((a, b) => snapshot.inventory[b] - snapshot.inventory[a]),
+        quantities: ({ snapshot }, target) => amounts(snapshot.inventory[target] ?? 0),
+        build: (target, n, { snapshot }) => `!givePlayer(${q(entityNames(snapshot, 'player')[0])}, ${q(target)}, ${n})`,
     },
     {
         id: 'place_block',
@@ -147,10 +150,13 @@ export const ACTIONS = [
         build: (target, n) => `!putInChest(${q(target)}, ${n})`,
     },
     {
-        id: 'look_in_chest',
-        hint: 'see what the nearby chest holds',
+        id: 'take_from_chest',
+        hint: 'take an item the goal needs out of the nearby chest',
         possible: ({ snapshot }) => blockWithin(snapshot, 'chest', 16),
-        build: () => '!viewChest()',
+        // the chest's contents are unknown until it is opened, so only offer what the goal asks for
+        targets: ({ snapshot, knowledge }) => [...namesIn(snapshot.goal)].filter(name => knowledge.isItem(name)),
+        quantities: () => [1, 4, 16, 64],
+        build: (target, n) => `!takeFromChest(${q(target)}, ${n})`,
     },
     {
         id: 'drop_items',
@@ -188,8 +194,10 @@ export const ACTIONS = [
     },
     {
         id: 'wait',
-        hint: 'do nothing for a few seconds',
-        build: () => '!stay(5)',
+        hint: 'stand still for a moment; only when it is safe and nothing is worth doing',
+        // !stay pauses the reflex modes (self-defence, fleeing) while it runs, so never with a threat around
+        possible: ({ snapshot }) => !snapshot.entities.some(e => e.kind === 'hostile' && e.dist <= 16),
+        build: () => '!stay(3)',
     },
 ];
 
@@ -215,6 +223,19 @@ function actionFor(id) {
 export function listTargets(ctx, id, max = 20) {
     const action = actionFor(id);
     return action.targets ? [...new Set(action.targets(ctx))].slice(0, max) : [];
+}
+
+/**
+ * Facts about targets worth showing the model, e.g. {iron_ore: 'gives raw_iron'}. Only targets that have one.
+ * @param {CatalogContext} ctx
+ * @param {string} id
+ * @param {string[]} targets
+ * @returns {Record<string, string>}
+ */
+export function targetNotes(ctx, id, targets) {
+    const action = actionFor(id);
+    if (!action.note) return {};
+    return Object.fromEntries(targets.map(t => [t, /** @type {NonNullable<Action['note']>} */ (action.note)(ctx, t)]).filter(([, note]) => note));
 }
 
 /**
@@ -256,5 +277,5 @@ export function buildCommand(ctx, selection) {
         throw new Error(`"${selection.target}" is not a valid target for "${selection.id}".`);
     if (action.quantities && !listQuantities(ctx, selection.id, selection.target).includes(selection.quantity ?? NaN))
         throw new Error(`${selection.quantity} is not a valid quantity for "${selection.id}".`);
-    return action.build(action.targets ? selection.target : undefined, action.quantities ? selection.quantity : undefined);
+    return action.build(action.targets ? selection.target : undefined, action.quantities ? selection.quantity : undefined, ctx);
 }

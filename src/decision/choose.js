@@ -2,7 +2,7 @@
 // Hierarchical selection: action -> target -> quantity, one choice question per stage. Flat enumeration of
 // every (action, target, quantity) would run to hundreds of options; staged, each question stays small, and a
 // stage with a single option is not asked at all.
-import { buildCommand, listActions, listQuantities, listTargets } from './catalog.js';
+import { buildCommand, listActions, listQuantities, listTargets, targetNotes } from './catalog.js';
 
 /** @typedef {import('./catalog.js').CatalogContext} CatalogContext */
 /** @typedef {import('./types.js').DecisionResult} DecisionResult */
@@ -48,9 +48,11 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
         });
         decisions++;
         latencyMs += result.latencyMs;
-        inputTokens = inputTokens === null || result.inputTokens === null ? null : inputTokens + result.inputTokens;
+        inputTokens = inputTokens == null || result.inputTokens == null ? null : inputTokens + result.inputTokens;
         const answer = result.answers[id];
-        confidence = confidence === null || answer.confidence === null ? null : Math.min(confidence, answer.confidence);
+        // `== null` on purpose: a provider used without resilient() may leave confidence undefined, and
+        // Math.min(1, undefined) is NaN, which would sail through every threshold check downstream
+        confidence = confidence == null || answer.confidence == null ? null : Math.min(confidence, answer.confidence);
         return /** @type {string} */ (answer.value);
     }
 
@@ -62,7 +64,10 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
     const action = await ask('action', `Pick the single best next action for the bot, given its goal. Options: ${guide}`, actions.map(a => a.id));
 
     const targets = listTargets(ctx, action);
-    const target = targets.length > 0 ? await ask('target', `The bot will ${action}. Pick what.`, targets) : undefined;
+    const notes = Object.entries(targetNotes(ctx, action, targets)).map(([name, note]) => `${name} ${note}`).join('; ');
+    const target = targets.length > 0
+        ? await ask('target', `The bot will ${action}. Pick what.${notes ? ` Note: ${notes}.` : ''}`, targets)
+        : undefined;
 
     const quantities = listQuantities(ctx, action, target);
     const quantity = quantities.length > 0

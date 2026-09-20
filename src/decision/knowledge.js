@@ -8,6 +8,8 @@
  * @property {() => string[]} craftable item names that can be crafted right now
  * @property {() => string[]} smeltable inventory item names a furnace accepts, if a furnace and fuel are at hand
  * @property {(name: string) => boolean} isFood
+ * @property {(name: string) => boolean} isItem whether this is a real item name in this game version
+ * @property {(blockName: string) => string[]} dropsOf item names a block yields when mined (iron_ore -> raw_iron)
  */
 
 // Things worth offering to craft. Asking the recipe book about every one of ~1300 items on each decision
@@ -19,8 +21,14 @@ export const CRAFT_CANDIDATES = [
     ...['iron', 'diamond'].flatMap(tier => ['helmet', 'chestplate', 'leggings', 'boots'].map(piece => `${tier}_${piece}`)),
 ];
 
-const SMELTABLE = /^raw_(iron|gold|copper)$|_ore$|^(beef|porkchop|mutton|chicken|rabbit|cod|salmon|potato|kelp|sand|cobblestone|clay_ball|cactus)$|_log$/;
-const FUEL = /^(coal|charcoal|coal_block|lava_bucket|blaze_rod|dried_kelp_block)$|_(planks|log|wood)$|^stick$/;
+// These two mirror isSmeltable() and getSmeltingFuel() in src/utils/mcdata.js, which is what !smeltItem actually
+// checks; offering anything else only produces a command that fails. They are copied, not imported, because
+// mcdata.js loads native dependencies that are not available to unit tests. Keep them in sync.
+const MISC_SMELTABLES = ['beef', 'chicken', 'cod', 'mutton', 'porkchop', 'rabbit', 'salmon', 'tropical_fish', 'potato', 'kelp', 'sand', 'cobblestone', 'clay_ball'];
+/** @param {string} name */
+export const isSmeltable = name => name.includes('raw') || name.includes('log') || MISC_SMELTABLES.includes(name);
+/** @param {string} name */
+export const isFuel = name => ['coal', 'charcoal', 'blaze_rod', 'coal_block', 'lava_bucket'].includes(name) || name.includes('log') || name.includes('planks');
 
 /**
  * @param {any} bot a spawned mineflayer bot
@@ -35,6 +43,16 @@ export function createKnowledge(bot, snapshot, options = {}) {
     const near = (/** @type {string} */ name) => snapshot.blocks.some(block => block.name === name && block.dist <= reach);
     const heldIds = new Set(Object.keys(snapshot.inventory).filter(has).map(name => registry.itemsByName[name]?.id));
 
+    // Everything here is a pure function of the snapshot, and the catalog asks several times per decision
+    // (listActions, listTargets, buildCommand), so compute once. craftable() alone is ~60 recipe lookups.
+    /** @type {Map<string, any>} */
+    const memo = new Map();
+    /** @template T @param {string} key @param {() => T} compute @returns {T} */
+    const once = (key, compute) => {
+        if (!memo.has(key)) memo.set(key, compute());
+        return memo.get(key);
+    };
+
     return {
         canHarvest(blockName) {
             const block = registry.blocksByName[blockName];
@@ -43,7 +61,7 @@ export function createKnowledge(bot, snapshot, options = {}) {
             return Object.keys(block.harvestTools).some(id => heldIds.has(Number(id)));
         },
 
-        craftable() {
+        craftable: () => once('craftable', () => {
             // Mindcraft's craftRecipe places a crafting table from the inventory if needed, so carrying one counts.
             const table = near('crafting_table') || has('crafting_table');
             const goalNames = (snapshot.goal ?? '').toLowerCase().match(/[a-z][a-z0-9_]*/g) ?? [];
@@ -52,16 +70,26 @@ export function createKnowledge(bot, snapshot, options = {}) {
                 const item = registry.itemsByName[name];
                 return item && bot.recipesFor(item.id, null, 1, table ? true : null).length > 0;
             });
-        },
+        }),
 
-        smeltable() {
+        smeltable: () => once('smeltable', () => {
             if (!(near('furnace') || has('furnace'))) return [];
-            if (!Object.keys(snapshot.inventory).some(name => has(name) && FUEL.test(name))) return [];
-            return Object.keys(snapshot.inventory).filter(name => has(name) && SMELTABLE.test(name));
-        },
+            const owned = Object.keys(snapshot.inventory).filter(has);
+            // a log can be both; it only counts as smeltable if something else is left to burn
+            return owned.filter(name => isSmeltable(name) && owned.some(other => isFuel(other) && (other !== name || snapshot.inventory[name] > 1)));
+        }),
 
         isFood(name) {
             return name in (registry.foodsByName ?? {});
+        },
+
+        isItem(name) {
+            return Object.hasOwn(registry.itemsByName, name);
+        },
+
+        dropsOf(blockName) {
+            const drops = registry.blocksByName[blockName]?.drops ?? [];
+            return drops.map((/** @type {number} */ id) => registry.items[id]?.name).filter(Boolean);
         },
     };
 }

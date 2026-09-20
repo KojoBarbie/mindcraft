@@ -4,21 +4,28 @@
 // parser accepting the strings the catalog builds.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import mineflayer from 'mineflayer';
 import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
-import { buildCommand, createKnowledge, listActions, listTargets, takeSnapshot } from '../../src/decision/index.js';
+import { ACTIONS, buildCommand, createKnowledge, listActions, listQuantities, listTargets, takeSnapshot } from '../../src/decision/index.js';
+import { setSettings } from '../../src/agent/settings.js';
 
 const PROBE = 'catalog_probe';
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** @type {import('mineflayer').Bot} */
+/** @type {any} a bot created by Mindcraft's own initBot(), so its game data (mcdata) is initialised too */
 let probe;
+/** @type {(message: string) => unknown} Mindcraft's command parser; returns a string when it rejects */
+let parseCommandMessage;
 /** @type {Awaited<ReturnType<typeof startHarness>>} */
 let harness;
 
 before(async () => {
-    probe = mineflayer.createBot({ host: '127.0.0.1', port: 55916, username: PROBE, auth: 'offline', version: '1.21.6' });
+    // mcdata.js reads the game version from settings when it is first imported, and the parser validates block
+    // and item names through it, so: settings first, then import, then a bot whose login initialises the data.
+    setSettings({ host: '127.0.0.1', port: 55916, auth: 'offline', minecraft_version: '1.21.6' });
+    const { initBot } = await import('../../src/utils/mcdata.js');
+    ({ parseCommandMessage } = await import('../../src/agent/commands/index.js'));
+    probe = initBot(PROBE);
     await new Promise((resolve, reject) => {
         probe.once('spawn', () => resolve(undefined));
         probe.once('error', reject);
@@ -66,7 +73,41 @@ test('real recipe book: planks unlock sticks and a crafting table, not a stone p
     assert.ok(!craftable.includes('stone_pickaxe'), String(craftable));
 });
 
+test('every command the catalog can build here passes Mindcraft\'s own parser', { timeout: 60_000 }, async () => {
+    // a rich situation, so that most actions have something to offer
+    for (const item of ['iron_pickaxe', 'iron_sword', 'bread 5', 'raw_iron 6', 'coal 4', 'furnace', 'crafting_table', 'torch 8', 'cobblestone 40', 'iron_helmet'])
+        await rcon(`give ${PROBE} minecraft:${item}`);
+    const at = `execute at ${PROBE} run`;
+    await rcon(`${at} setblock ~0 ~ ~2 minecraft:chest`);
+    await rcon(`${at} setblock ~0 ~ ~-2 minecraft:furnace`);
+    await rcon(`${at} summon minecraft:cow ~2 ~ ~2`);
+    await rcon(`effect give ${PROBE} minecraft:hunger 5 200 true`);
+    await sleep(4000);
+
+    const snapshot = takeSnapshot(probe, { goal: 'have iron_ingot' });
+    const c = { snapshot, knowledge: createKnowledge(probe, snapshot) };
+    const offered = listActions(c).map(a => a.id);
+    /** @type {string[]} */
+    const built = [];
+    for (const id of offered) {
+        const targets = listTargets(c, id);
+        for (const target of targets.length > 0 ? targets.slice(0, 3) : [undefined]) {
+            const quantities = listQuantities(c, id, target);
+            for (const quantity of quantities.length > 0 ? quantities : [undefined]) built.push(buildCommand(c, { id, target, quantity }));
+        }
+    }
+    assert.ok(offered.length >= 12, `only ${offered} of ${ACTIONS.length} actions were possible`);
+    for (const command of built) {
+        const parsed = parseCommandMessage(command);
+        assert.equal(typeof parsed, 'object', `${command} -> ${parsed}`); // a string is the parser's error message
+    }
+    await rcon(`${at} kill @e[type=minecraft:cow,distance=..16]`);
+    await rcon(`clear ${PROBE}`);
+});
+
 test('commands built by the catalog are accepted and executed by Mindcraft', { timeout: 120_000 }, async () => {
+    await rcon(`give ${PROBE} minecraft:oak_planks 8`);
+    await sleep(1500);
     const command = buildCommand(context(), { id: 'craft', target: 'stick', quantity: 1 });
     assert.equal(command, '!craftRecipe("stick", 1)');
     await rcon(`give ${harness.name} minecraft:oak_planks 8`);

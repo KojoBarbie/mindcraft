@@ -8,5 +8,5 @@ export { takeSnapshot } from './snapshot.js';
 export { compressState } from './state.js';
 export { estimateTokens } from './tokens.js';
 export { createKnowledge } from './knowledge.js';
-export { ACTIONS, listActions, listTargets, listQuantities, buildCommand } from './catalog.js';
+export { ACTIONS, listActions, listTargets, listQuantities, targetNotes, buildCommand } from './catalog.js';
 export { chooseCommand } from './choose.js';

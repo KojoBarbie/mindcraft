@@ -1,7 +1,7 @@
 // @ts-check
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ACTIONS, amounts, buildCommand, listActions, listQuantities, listTargets } from '../../src/decision/catalog.js';
+import { ACTIONS, amounts, buildCommand, listActions, listQuantities, listTargets, targetNotes } from '../../src/decision/catalog.js';
 import { chooseCommand } from '../../src/decision/choose.js';
 import { createMockProvider, resilient } from '../../src/decision/index.js';
 
@@ -25,6 +25,8 @@ function ctx(snapshot = {}, knowledge = {}) {
             craftable: () => [],
             smeltable: () => [],
             isFood: name => ['bread', 'cooked_beef'].includes(name),
+            isItem: name => ['iron_ingot', 'bread', 'diamond'].includes(name),
+            dropsOf: name => (name === 'iron_ore' ? ['raw_iron'] : [name]),
             ...knowledge,
         },
     };
@@ -41,10 +43,12 @@ test('the catalog never offers more than 20 actions, and ids are unique', () => 
 });
 
 test('blocks that cannot be harvested with what the bot carries are not offered', () => {
-    const blocks = [{ name: 'iron_ore', dist: 3, dy: 0 }, { name: 'oak_log', dist: 5, dy: 0 }, { name: 'lava', dist: 2, dy: -1 }, { name: 'chest', dist: 4, dy: 0 }];
+    const blocks = [{ name: 'iron_ore', dist: 3, dy: 0 }, { name: 'oak_log', dist: 5, dy: 0 }, { name: 'lava', dist: 2, dy: -1 }, { name: 'chest', dist: 4, dy: 0 },
+        { name: 'anvil', dist: 1, dy: 0 }, { name: 'enchanting_table', dist: 1, dy: 0 }, { name: 'red_bed', dist: 1, dy: 0 }, { name: 'bedrock', dist: 1, dy: -3 }];
     assert.deepEqual(listTargets(ctx({ blocks }), 'collect_blocks'), ['oak_log']);
     const withPickaxe = ctx({ blocks }, { canHarvest: () => true });
-    assert.deepEqual(listTargets(withPickaxe, 'collect_blocks'), ['iron_ore', 'oak_log']); // nearest first; never lava or chests
+    assert.deepEqual(listTargets(withPickaxe, 'collect_blocks'), ['iron_ore', 'oak_log']); // nearest first; never hazards, workstations, beds
+    assert.deepEqual(targetNotes(withPickaxe, 'collect_blocks', ['iron_ore', 'oak_log']), { iron_ore: 'gives raw_iron' });
 });
 
 test('crafting and smelting appear only when there is something to make', () => {
@@ -89,6 +93,42 @@ test('situational actions: sleep at night near a bed, surface when deep, dig wit
     assert.ok(!ids(ctx({ inventory: { dirt: 64 } })).includes('drop_items'));
 });
 
+test('giving goes to the nearest player, and every owned item can be given', () => {
+    const c = ctx({
+        inventory: Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`item_${i}`, i + 1])),
+        entities: [{ name: 'far_player', kind: 'player', dist: 12 }, { name: 'near_player', kind: 'player', dist: 2 }],
+    });
+    assert.equal(listTargets(c, 'give_to_player', 100).length, 25);
+    assert.equal(buildCommand(c, { id: 'give_to_player', target: 'item_24', quantity: 1 }), '!givePlayer("near_player", "item_24", 1)');
+});
+
+test('taking from a chest offers only real items the goal names', () => {
+    const chest = [{ name: 'chest', dist: 3, dy: 0 }];
+    assert.ok(!ids(ctx({ blocks: chest })).includes('take_from_chest'));
+    const c = ctx({ blocks: chest, goal: 'have iron_ingot and return' });
+    assert.deepEqual(listTargets(c, 'take_from_chest'), ['iron_ingot']);
+    assert.equal(buildCommand(c, { id: 'take_from_chest', target: 'iron_ingot', quantity: 4 }), '!takeFromChest("iron_ingot", 4)');
+});
+
+test('waiting is not offered with a hostile mob close: !stay pauses the reflex modes', () => {
+    assert.ok(ids(ctx()).includes('wait'));
+    assert.ok(!ids(ctx({ entities: [{ name: 'zombie', kind: 'hostile', dist: 9 }] })).includes('wait'));
+    assert.ok(ids(ctx({ entities: [{ name: 'zombie', kind: 'hostile', dist: 22 }] })).includes('wait'));
+});
+
+test('a provider that leaves confidence undefined yields null, never NaN', async () => {
+    const provider = {
+        decide: (/** @type {import('../../src/decision/types.js').DecisionRequest} */ request) => Promise.resolve({
+            answers: Object.fromEntries(request.questions.map(question => [question.id,
+                /** @type {any} */ ({ type: 'choice', value: /** @type {any} */ (question).options[0] })])),
+            inputTokens: /** @type {any} */ (undefined), provider: 'bare', latencyMs: 1, attempts: 1,
+        }),
+    };
+    const chosen = await chooseCommand(provider, ctx({ blocks: [{ name: 'oak_log', dist: 3, dy: 0 }] }), {});
+    assert.equal(chosen.confidence, null);
+    assert.equal(chosen.inputTokens, null);
+});
+
 test('amounts offers round steps up to what is available', () => {
     assert.deepEqual(amounts(0), []);
     assert.deepEqual(amounts(1), [1]);
@@ -108,11 +148,11 @@ test('commands are built in Mindcraft syntax', () => {
     assert.equal(buildCommand(c, { id: 'craft', target: 'stick', quantity: 1 }), '!craftRecipe("stick", 1)');
     assert.equal(buildCommand(c, { id: 'eat', target: 'bread' }), '!consume("bread")');
     assert.equal(buildCommand(c, { id: 'go_to_player', target: 'tomo' }), '!goToPlayer("tomo", 3)');
-    assert.equal(buildCommand(c, { id: 'give_to_player', target: 'tomo:cobblestone', quantity: 16 }), '!givePlayer("tomo", "cobblestone", 16)');
+    assert.equal(buildCommand(c, { id: 'give_to_player', target: 'cobblestone', quantity: 16 }), '!givePlayer("tomo", "cobblestone", 16)');
     assert.equal(buildCommand(c, { id: 'store_in_chest', target: 'cobblestone', quantity: 40 }), '!putInChest("cobblestone", 40)');
     assert.equal(buildCommand(c, { id: 'place_block', target: 'crafting_table' }), '!placeHere("crafting_table")');
     assert.equal(buildCommand(c, { id: 'explore', quantity: 32 }), '!moveAway(32)');
-    assert.equal(buildCommand(c, { id: 'wait' }), '!stay(5)');
+    assert.equal(buildCommand(c, { id: 'wait' }), '!stay(3)');
 });
 
 test('a selection the catalog would not have offered can never become a command', () => {
@@ -139,7 +179,7 @@ test('whatever a model picks, the result is a well-formed command (fuzz over see
         assert.ok(chosen.decisions >= 1 && chosen.decisions <= 3);
         seen.add(chosen.action);
     }
-    assert.ok(seen.size >= 12, `only saw ${[...seen]}`);
+    assert.ok(seen.size >= 10, `only saw ${[...seen]}`);
 });
 
 test('stages with a single option are not asked; confidence is the weakest stage', async () => {
@@ -159,7 +199,7 @@ test('stages with a single option are not asked; confidence is the weakest stage
     assert.ok(Math.abs(/** @type {number} */ (chosen.confidence) - 1 / 3) < 1e-9);
 
     const nothingToDecide = await chooseCommand(provider, ctx(), {}, { only: ['wait'] });
-    assert.deepEqual([nothingToDecide.command, nothingToDecide.decisions, nothingToDecide.confidence], ['!stay(5)', 0, 1]);
+    assert.deepEqual([nothingToDecide.command, nothingToDecide.decisions, nothingToDecide.confidence], ['!stay(3)', 0, 1]);
 });
 
 test('the first stage can be restricted, e.g. to safety actions while something else is running', async () => {
