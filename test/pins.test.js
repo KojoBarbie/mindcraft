@@ -33,9 +33,11 @@ for (const patch of patches) {
         assert.equal(entry.version, patch.version, `${patch.file} would not apply`);
     });
 
-    if (pkg.dependencies[patch.name]) {
+    // transitive dependencies (e.g. protodef) are held by the lockfile only
+    const declared = pkg.dependencies?.[patch.name] ?? pkg.devDependencies?.[patch.name];
+    if (declared !== undefined) {
         test(`package.json pins ${patch.name} exactly`, () => {
-            assert.equal(pkg.dependencies[patch.name], patch.version);
+            assert.equal(declared, patch.version);
         });
     }
 }
