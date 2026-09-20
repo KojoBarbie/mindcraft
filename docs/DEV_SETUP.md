@@ -98,3 +98,16 @@ questions, a cancelled request, a broken mock policy) are rethrown at once inste
 A profile selects providers with `decision_model` (a name, an object with options, or an array in fallback
 order) and tunes the wrapper with `decision_options`. `"decision_model": "mock"` needs no API key: it
 answers at random from a seed, or from a `policy` function when constructed in code.
+
+### Choosing a command
+
+`catalog.js` lists the actions a model may pick, each mapped onto an existing Mindcraft `!command`. An action
+is offered only when it is possible and has a valid target (`knowledge.js` answers "can this block be
+harvested with what I carry", "what can I craft or smelt right now" from the game's registry and recipe book),
+so impossible moves are never options. `chooseCommand()` asks in stages (action, then target, then quantity),
+skips any stage with a single option, and returns a ready `!command(args)` string plus the weakest stage's
+confidence. `buildCommand()` refuses any selection the catalog would not have offered.
+
+The dev server runs with Paper's connection throttle disabled (`dev/server-patches/bukkit.json`). With the
+default 4 s throttle, the second of two bots connecting back to back is kicked, which looks like "the agent
+never joined".

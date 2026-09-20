@@ -15,9 +15,13 @@ services:
       SEED: "mindcraft-dev" # fixed seed so runs are comparable
       ENABLE_RCON: "true"
       RCON_PASSWORD: dev
+      # Paper refuses a second connection from the same IP within 4 s by default, which kicks the second bot
+      # whenever two connect back to back (tests, multi-agent runs). Applied to bukkit.yml on every start.
+      PATCH_DEFINITIONS: /patches
     ports:
       - "127.0.0.1:55916:25565" # matches the default port in settings.js; not exposed to the LAN
     volumes:
       - ./server_data_dev:/data
+      - ./dev/server-patches:/patches:ro
     stdin_open: true
     tty: true
