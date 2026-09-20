@@ -18,7 +18,7 @@
         "groq-sdk": "^0.15.0",
         "minecraft-data": "^3.97.0",
         "minecraft-assets": "^1.16.0",
-        "mineflayer": "^4.33.0",
+        "mineflayer": "4.33.0",
         "mineflayer-armor-manager": "^2.0.1",
         "mineflayer-auto-eat": "^3.3.6",
         "mineflayer-collectblock": "^1.4.1",
@@ -38,16 +38,22 @@
         "yargs": "^17.7.2"
     },
     "overrides": {
-      "canvas": "^3.1.0",
-      "gl": "^8.1.6"
+        "canvas": "^3.1.0",
+        "gl": "^8.1.6"
     },
     "scripts": {
         "postinstall": "patch-package",
         "start": "node main.js",
         "reinstall": "npm run clean:modules && npm install",
-        "clean:modules": "node -e \"const fs=require('fs');const p=require('path');['node_modules','package-lock.json'].forEach(f=>{if(fs.existsSync(f)){if(fs.lstatSync(f).isDirectory()){fs.rmSync(f,{recursive:true,force:true});}else{fs.unlinkSync(f);}}});\""
+        "clean:modules": "node -e \"const fs=require('fs');const p=require('path');['node_modules','package-lock.json'].forEach(f=>{if(fs.existsSync(f)){if(fs.lstatSync(f).isDirectory()){fs.rmSync(f,{recursive:true,force:true});}else{fs.unlinkSync(f);}}});\"",
+        "dev:server": "docker compose -f docker-compose.dev.yml up -d",
+        "dev:server:logs": "docker compose -f docker-compose.dev.yml logs -f",
+        "dev:server:down": "docker compose -f docker-compose.dev.yml down"
     },
     "devDependencies": {
         "patch-package": "^8.0.0"
+    },
+    "volta": {
+        "node": "22.23.2"
     }
 }
