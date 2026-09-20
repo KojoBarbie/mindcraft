@@ -10,3 +10,7 @@ export { estimateTokens } from './tokens.js';
 export { createKnowledge } from './knowledge.js';
 export { ACTIONS, listActions, listTargets, listQuantities, targetNotes, buildCommand } from './catalog.js';
 export { chooseCommand } from './choose.js';
+export { createGameData } from './gamedata.js';
+export { GoalQueue, haveItem, haveTool, haveFood, isDone, describeGoal } from './goals.js';
+export { planGoal, focusFor } from './planner.js';
+export { SURVIVAL_CURRICULUM, loadCurriculum } from './curriculum.js';
