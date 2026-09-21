@@ -60,6 +60,13 @@ async function main() {
     mkdirSync(botDir, { recursive: true });
     process.env.MINDCRAFT_USAGE_LOG = join(botDir, 'llm_usage.jsonl');
 
+    // --fresh-world (lab only): put the lab world back as it was generated, so earlier runs' holes and spilt
+    // lava do not decide this one (the same restore the benchmark uses)
+    if (args.includes('--fresh-world')) {
+        if (!args.includes('--lab')) throw new Error('--fresh-world needs --lab: the main dev world is not restored');
+        const { restoreLabWorld } = await import('./lib/lab_world.js');
+        await restoreLabWorld();
+    }
     await rcon('difficulty easy');
     await rcon('weather clear');
     await rcon(`time set ${opt('time', '1000')}`);

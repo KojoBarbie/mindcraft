@@ -1457,6 +1457,34 @@ export async function followPlayer(bot, username, distance=4) {
 }
 
 
+export async function goToward(bot, x, z, step = 32) {
+    /**
+     * mindcraft fork: head for a far point one leg of up to `step` blocks at a time. One long goto computes
+     * for a long while and cannot be stopped meanwhile; when a reflex tried to interrupt it Mindcraft killed
+     * the agent, eight times in one test night. Called again, it covers the next leg.
+     * @returns {Promise<boolean>} true once within 4 blocks of the point
+     **/
+    const pos = bot.entity.position;
+    const dx = x - pos.x, dz = z - pos.z;
+    const left = Math.hypot(dx, dz);
+    if (left <= 4) {
+        log(bot, `Arrived near ${Math.round(x)}, ${Math.round(z)}.`);
+        return true;
+    }
+    const k = Math.min(1, step / left);
+    const tx = Math.round(pos.x + dx * k), tz = Math.round(pos.z + dz * k);
+    try {
+        await goToGoal(bot, new pf.goals.GoalNearXZ(tx, tz, 3));
+    } catch (err) {
+        if (!/NoPath|Timeout/i.test(String(err))) throw err;
+        log(bot, `No path towards ${tx}, ${tz}; trying round.`);
+        return await explore(bot, 16);
+    }
+    const now = Math.hypot(x - bot.entity.position.x, z - bot.entity.position.z);
+    log(bot, `On the way to ${Math.round(x)}, ${Math.round(z)}: ${Math.round(now)} blocks to go.`);
+    return now <= 4;
+}
+
 export async function explore(bot, distance = 32) {
     /**
      * mindcraft fork: walk somewhere new, keeping a heading between calls so that exploring goes somewhere.

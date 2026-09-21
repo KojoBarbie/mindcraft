@@ -17,6 +17,7 @@ import { io } from 'socket.io-client';
 import { startHarness } from './lib/harness.js';
 import { rcon } from './lib/rcon.js';
 import { CONFIGS, formatTable, scenarioMet, summarizeTrial } from './lib/bench.js';
+import { makePristineLabWorld, restoreLabWorld } from './lib/lab_world.js';
 import { createGameData } from '../src/decision/gamedata.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -40,56 +41,10 @@ const opt = (name, fallback) => {
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 const data = createGameData(mcdata('1.21.6'));
 
-/** @param {string[]} extra */
-function compose(...extra) {
-    execFileSync('docker', ['compose', '-f', join(LAB_ROOT, 'docker-compose.dev.yml'), '--profile', 'lab', ...extra],
-        { stdio: 'ignore', env: { ...process.env, MC_EULA: 'true' } }); // the lab server was started with the EULA accepted
-}
-
-async function waitForServer() {
-    const deadline = Date.now() + 180_000;
-    for (;;) {
-        try {
-            if (/players online/.test(await rcon('list'))) return;
-        } catch { /* not up yet */ }
-        if (Date.now() > deadline) throw new Error('the lab server did not come up within 3 minutes');
-        await sleep(3_000);
-    }
-}
-
-/** Put the lab world back as it was when the pristine copy was made. */
-/** The world files are only touched once the server is known to be down: deleting a live world corrupts it. */
-function stopServer() {
-    compose('stop', SERVICE);
-    const running = execFileSync('docker', ['compose', '-f', join(LAB_ROOT, 'docker-compose.dev.yml'), '--profile', 'lab', 'ps', '-q', '--status', 'running', SERVICE],
-        { encoding: 'utf8', env: process.env }).trim();
-    if (running) throw new Error(`the lab server is still running after stop (compose project ${process.env.COMPOSE_PROJECT_NAME}); not touching its world`);
-    if (!existsSync(join(DATA, 'world'))) throw new Error(`no world at ${DATA}: is MC_LAB_ROOT the checkout the lab server runs from?`);
-}
-
-async function restoreWorld() {
-    if (!existsSync(PRISTINE)) throw new Error(`no pristine world at ${PRISTINE}: run with --make-pristine first`);
-    stopServer();
-    for (const w of WORLDS) {
-        rmSync(join(DATA, w), { recursive: true, force: true });
-        cpSync(join(PRISTINE, w), join(DATA, w), { recursive: true });
-    }
-    compose('up', '-d', SERVICE);
-    await waitForServer();
-}
-
+const restoreWorld = restoreLabWorld;
 async function makePristine() {
-    stopServer();
-    for (const w of WORLDS) rmSync(join(DATA, w), { recursive: true, force: true });
-    compose('up', '-d', SERVICE);
-    await waitForServer();
-    await rcon('save-all flush');
-    stopServer();
-    rmSync(PRISTINE, { recursive: true, force: true });
-    for (const w of WORLDS) cpSync(join(DATA, w), join(PRISTINE, w), { recursive: true });
-    compose('up', '-d', SERVICE);
-    await waitForServer();
-    console.log(`[bench] pristine world saved to ${PRISTINE}`);
+    await makePristineLabWorld();
+    console.log('[bench] pristine world saved');
 }
 
 /** @param {string} path */
