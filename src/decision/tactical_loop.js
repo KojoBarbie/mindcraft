@@ -1031,7 +1031,8 @@ export async function attachTacticalLoop(agent) {
         role = createMinerRole({ center: profile.role.center, radius: profile.role.radius, mineY: profile.role.mineY, say: text => agent.bot.chat(text) });
     } else if (profile.role?.type === 'guard') {
         const [{ createGuardRole }, { takeGuardReport }] = await Promise.all([import('./roles/guard.js'), import('../agent/library/guard.js')]);
-        role = createGuardRole({ center: profile.role.center, radius: profile.role.radius, say: text => agent.bot.chat(text), report: () => takeGuardReport(agent.bot) });
+        role = createGuardRole({ center: profile.role.center, radius: profile.role.radius, say: text => agent.bot.chat(text), report: () => takeGuardReport(agent.bot),
+            onPost: post => { agent.bot.exploreLeash = { x: post.x, z: post.z, radius: 96 }; } });
     } else if (profile.role?.type === 'lumberjack') {
         const { createLumberjackRole } = await import('./roles/lumberjack.js');
         role = createLumberjackRole({ center: profile.role.center, radius: profile.role.radius, quota: profile.role.quota, chest: profile.role.chest, say: text => agent.bot.chat(text) });

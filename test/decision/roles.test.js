@@ -34,6 +34,16 @@ test('guard: keeps watch at night only when fit to fight', () => {
     assert.equal(role.keepsWatchAtNight, true);
 });
 
+test('guard: tells where its post is once, so exploring for gear stays near it', () => {
+    /** @type {unknown[]} */
+    const posts = [];
+    const role = createGuardRole({ onPost: post => posts.push(post) });
+    const l = loop();
+    role.step(l, snap({ pos: { x: 5, y: 70, z: -3 } }), isFood);
+    role.step(l, snap({ pos: { x: 40, y: 70, z: 9 } }), isFood);
+    assert.deepEqual(posts, [{ x: 5, y: 70, z: -3 }]);
+});
+
 test('guard: by day, missing gear becomes goals and the loop pursues them', () => {
     const role = createGuardRole();
     const l = loop();
