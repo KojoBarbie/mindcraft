@@ -17,6 +17,7 @@ import { buildCommand, listActions, listQuantities, listTargets, maxQuantity, ta
  * @property {number} decisions provider calls made (0-3)
  * @property {number} latencyMs summed over the calls
  * @property {number | null} inputTokens summed over the calls; null if any call did not report it
+ * @property {string} [provider] which provider answered the last stage asked
  */
 
 /**
@@ -33,6 +34,8 @@ import { buildCommand, listActions, listQuantities, listTargets, maxQuantity, ta
  */
 export async function chooseCommand(provider, ctx, state, options = {}) {
     let decisions = 0;
+    /** @type {string | undefined} */
+    let provider_;
     let latencyMs = 0;
     /** @type {number | null} */
     let inputTokens = 0;
@@ -55,6 +58,7 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
         decisions++;
         latencyMs += result.latencyMs;
         inputTokens = inputTokens == null || result.inputTokens == null ? null : inputTokens + result.inputTokens;
+        if (result.provider) provider_ = result.provider;
         const answer = result.answers[id];
         // `== null` on purpose: a provider used without resilient() may leave confidence undefined, and
         // Math.min(1, undefined) is NaN, which would sail through every threshold check downstream
@@ -77,7 +81,7 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
             command: buildCommand(ctx, { id: action, target: preset.target, quantity }),
             action, target: preset.target, quantity,
             confidence: decisions === 0 ? 1 : confidence,
-            decisions, latencyMs, inputTokens,
+            decisions, latencyMs, inputTokens, ...(provider_ ? { provider: provider_ } : {}),
         };
     }
 
@@ -95,6 +99,6 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
         command: buildCommand(ctx, { id: action, target, quantity }),
         action, target, quantity,
         confidence: decisions === 0 ? 1 : confidence,
-        decisions, latencyMs, inputTokens,
+        decisions, latencyMs, inputTokens, ...(provider_ ? { provider: provider_ } : {}),
     };
 }

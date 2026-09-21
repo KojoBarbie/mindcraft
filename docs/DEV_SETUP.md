@@ -204,6 +204,25 @@ saved alongside); edit them and the queue is rebuilt. A goal given up is tried a
 `tactical.retryFailedAfterMs` (30 min). Spend is kept one entry per minute, so the file stays small; delete it
 to start afresh.
 
+### Telemetry (`telemetry.js`, `npm run stats`)
+
+Every provider call and the loop's notable events go to `bots/<name>/decisions.jsonl`, one JSON object per line
+(moved to `.jsonl.1` past 20 MB; `"telemetry": false` in the profile turns it off). A call line has the provider,
+the questions' shapes and answers with confidence, latency, tokens, attempts and an estimated cost (the guard's
+price if set, else a default per provider: jev 0.042/0, openai as gpt-5-nano 0.05/0.40 USD per Mtok in/out).
+
+```
+npm run stats                      # every bots/*/decisions.jsonl
+npm run stats -- path/to/a.jsonl   # specific files
+```
+
+prints the period, decisions per hour, p50/p95 latency, tokens and USD per hour, the stale rate (answers thrown
+away because the world moved on), the low-confidence rate (< 0.6), results, interrupts, goals given up, crashes
+and deaths. The MindServer dashboard shows the current goal, the last decision and today's spend per agent.
+
+One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
+check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
+
 ### Chat models as decision providers (`providers/openai.js`)
 
 Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions

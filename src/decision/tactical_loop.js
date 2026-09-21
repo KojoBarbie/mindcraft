@@ -15,6 +15,7 @@ import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
 import { LoopGuard, metered } from './guard.js';
 import { STATE_VERSION, fingerprint, loadJSON, saveJSON } from './persistence.js';
+import { RECORDED_EVENTS, createTelemetry, describeCall, estimateUsd } from './telemetry.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./snapshot.js').RecentAction} RecentAction */
@@ -66,6 +67,8 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {string} [goalsFingerprint] what the profile asked for, saved alongside so a changed profile starts afresh
  * @property {number} [crashBanMs] how long to ban the command that was running when the agent last crashed
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
+ * @property {(record: Record<string, unknown>) => void} [telemetry] receives every provider call and the loop's
+ *   notable events (see telemetry.js); unset = nothing recorded
  */
 
 // What Mindcraft says when it kills the agent because an action wedged it (modes.js unstuck, action_manager.js),
@@ -117,7 +120,20 @@ export class TacticalLoop {
         this.commandTimeoutMs = options.commandTimeoutMs ?? 120_000;
         this.stuckGoalMs = options.stuckGoalMs ?? 60_000;
         this.onLowConfidence = options.onLowConfidence;
-        this.onEvent = options.onEvent ?? (() => {});
+        const onEvent = options.onEvent ?? (() => {});
+        const telemetry = options.telemetry;
+        /** @type {{goal: string, command: string, confidence: number | null, latencyMs: number, provider?: string, at: number} | null} */
+        this.lastDecision = null;
+        this.currentGoal = '';
+        /** @param {{type: string, detail?: any}} event */
+        this.onEvent = event => {
+            if (event.type === 'decision') {
+                const d = event.detail;
+                this.lastDecision = { goal: d.goal, command: d.command, confidence: d.confidence, latencyMs: d.latencyMs, provider: d.provider, at: Date.now() };
+            }
+            onEvent(event);
+            if (telemetry && RECORDED_EVENTS.has(event.type)) telemetry({ kind: 'event', type: event.type, detail: event.detail });
+        };
         this.execute = options.execute;
         this.guard = options.guard ?? new LoopGuard();
         this.statePath = options.statePath;
@@ -129,7 +145,22 @@ export class TacticalLoop {
         /** @type {{cmd: string, at: number, endedAt: number | null} | null} the last command fired, for crash blame */
         this.lastFired = null;
         // Every call through the loop is charged to the guard, retries and failures included.
-        this.provider = metered(provider, this.guard);
+        this.provider = metered(provider, this.guard, telemetry && (call => {
+            const result = call.result;
+            const usage = { inputTokens: result?.inputTokens ?? null, outputTokens: result?.outputTokens ?? null };
+            const name = result?.provider ?? /** @type {any} */ (provider).name ?? 'unknown';
+            const price = this.guard.priced ? { inputUsdPerMillion: this.guard.inputUsdPerMillion, outputUsdPerMillion: this.guard.outputUsdPerMillion } : {};
+            telemetry({
+                kind: 'call',
+                provider: name,
+                questions: describeCall(call.request.questions ?? [], result?.answers),
+                latencyMs: call.latencyMs,
+                ...usage,
+                attempts: result?.attempts ?? /** @type {any} */ (call.error)?.attempts ?? 1,
+                usd: result ? estimateUsd(name, usage, price) : null,
+                ...(call.error ? { error: call.error instanceof Error ? call.error.message : String(call.error) } : {}),
+            });
+        }));
         /** @type {number | null} the goal the guard's counters are about */
         this.guardGoalId = null;
 
@@ -327,6 +358,7 @@ export class TacticalLoop {
             return;
         }
         const goalText = describeGoal(queued.goal);
+        this.currentGoal = goalText;
         if (queued.id !== this.guardGoalId) {
             this.guard.reset(); // a new goal starts with a clean slate
             this.guardGoalId = queued.id;
@@ -626,6 +658,18 @@ export class TacticalLoop {
         }
     }
 
+    /** For the MindServer dashboard: what the loop is doing and what it has spent. */
+    status() {
+        return {
+            goal: this.currentGoal || null,
+            running: this.pendingCommand || null,
+            lastDecision: this.lastDecision,
+            usage: this.guard.usage(),
+            restarts: this.restarts,
+            goals: this.goals.toJSON().goals.map(q => ({ goal: describeGoal(q.goal), status: q.status })),
+        };
+    }
+
     /** @param {string} [goalText] */
     snapshotFor(goalText) {
         const running = this.agent.actions.currentActionLabel || this.pendingCommand;
@@ -690,6 +734,9 @@ export async function attachTacticalLoop(agent) {
         guard: new LoopGuard(profile.guard ?? {}),
         statePath,
         goalsFingerprint,
+        telemetry: profile.telemetry === false ? undefined : createTelemetry(`./bots/${agent.name}/decisions.jsonl`, {
+            onError: error => console.warn(`[tactical:${agent.name}] telemetry write failed:`, error instanceof Error ? error.message : error),
+        }),
         onEvent: event => console.log(`[tactical:${agent.name}]`, event.type, event.detail === undefined ? '' : JSON.stringify(event.detail)),
     });
     // budgets and bans carry over even when the goals were rebuilt
