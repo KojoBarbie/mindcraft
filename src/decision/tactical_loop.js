@@ -31,7 +31,7 @@ import { createStrategist, isAddressedTo } from './strategist.js';
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
-const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol'];
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToCoordinates'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };
@@ -74,7 +74,7 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
  * @property {boolean} [nightShelter] at night, dig in and wait for morning instead of deciding; default true.
  *   Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
- * @property {{name: string, keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null}} [role]
+ * @property {{name: string, keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null, state?: () => unknown, restore?: (saved: any) => void}} [role]
  *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
  *   loop pursue its goals as usual
  * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)
@@ -881,6 +881,7 @@ export class TacticalLoop {
                 restarts: this.restarts,
                 guardGoalId: this.guardGoalId,
                 sheltered: this.sheltered,
+                role: this.role?.state ? { name: this.role.name, state: this.role.state() } : null,
                 memory: {
                     seen: [...this.seenBlocks],
                     absent: [...this.absentBlocks],
@@ -916,6 +917,7 @@ export class TacticalLoop {
                     .map((/** @type {[number, number]} */ [id, since]) => [id, since + age]));
         }
         this.restarts = Number.isInteger(loop.restarts) && loop.restarts >= 0 ? loop.restarts : 0;
+        if (this.role?.restore && loop.role?.name === this.role.name) this.role.restore(loop.role.state);
         // what it learnt about its surroundings: a crash restart must not send it back to the same cliff
         const memory = loop.memory ?? {};
         const now = Date.now();

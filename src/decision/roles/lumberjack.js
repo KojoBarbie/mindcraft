@@ -34,6 +34,14 @@ export function createLumberjackRole(options = {}) {
 
     return {
         name: 'lumberjack',
+        state: () => ({ center, delivered, chest, radiusNow }),
+        /** @param {any} saved */
+        restore(saved) {
+            if (!options.center && saved?.center && Number.isFinite(saved.center.x) && Number.isFinite(saved.center.z)) center = saved.center;
+            if (Number.isFinite(saved?.delivered)) delivered = saved.delivered;
+            if (Array.isArray(saved?.chest) && saved.chest.length === 3 && !Array.isArray(options.chest)) chest = saved.chest;
+            if (Number.isFinite(saved?.radiusNow)) radiusNow = saved.radiusNow;
+        },
         get delivered() { return delivered; },
 
         /**
