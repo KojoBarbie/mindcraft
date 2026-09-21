@@ -720,9 +720,10 @@
                             const conf = d && typeof d.confidence === 'number' ? ` ${(d.confidence * 100).toFixed(0)}%` : '';
                             const last = d ? `${d.command} (${d.provider || '?'}${conf}, ${Math.round(d.latencyMs || 0)} ms)` : '-';
                             const u = t.usage || {};
-                            const cost = u.usd && u.usd.day > 0 ? `$${u.usd.day.toFixed(4)} today` : `${(u.tokens && u.tokens.day) || 0} tokens today`;
+                            // the same estimate npm run stats uses (per-provider prices), not the guard's budget counter
+                            const cost = typeof t.usdSinceStart === 'number' ? `~$${t.usdSinceStart.toFixed(4)} since start` : `${(u.tokens && u.tokens.day) || 0} tokens in 24 h`;
                             const failed = (t.goals || []).filter(g => g.status === 'failed').length;
-                            tacticalEl.textContent = `goal: ${t.goal || '-'} | last: ${last} | ${(u.decisions && u.decisions.hour) || 0} calls/h, ${cost}`
+                            tacticalEl.textContent = `goal: ${t.goal || '-'} | last: ${last} | ${(u.decisions && u.decisions.hour) || 0} calls in the last hour, ${cost}`
                                 + (failed ? ` | ${failed} goal(s) given up` : '') + (t.restarts ? ` | ${t.restarts} crash restart(s)` : '');
                         }
                     }

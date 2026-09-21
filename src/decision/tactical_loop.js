@@ -145,22 +145,29 @@ export class TacticalLoop {
         /** @type {{cmd: string, at: number, endedAt: number | null} | null} the last command fired, for crash blame */
         this.lastFired = null;
         // Every call through the loop is charged to the guard, retries and failures included.
-        this.provider = metered(provider, this.guard, telemetry && (call => {
+        /** estimated USD spent since this loop started, for the dashboard; null until a priced call is made */
+        this.usdSinceStart = /** @type {number | null} */ (null);
+        this.provider = metered(provider, this.guard, call => {
             const result = call.result;
             const usage = { inputTokens: result?.inputTokens ?? null, outputTokens: result?.outputTokens ?? null };
             const name = result?.provider ?? /** @type {any} */ (provider).name ?? 'unknown';
+            // the table knows each provider's own price; the guard's is only a fallback, since a fallback chain
+            // mixes providers and one price for all of them would be wrong for most calls
             const price = this.guard.priced ? { inputUsdPerMillion: this.guard.inputUsdPerMillion, outputUsdPerMillion: this.guard.outputUsdPerMillion } : {};
-            telemetry({
+            const usd = result ? estimateUsd(name, usage, price) : null; // a failed call's bill is unknown
+            if (usd !== null) this.usdSinceStart = (this.usdSinceStart ?? 0) + usd;
+            telemetry?.({
                 kind: 'call',
                 provider: name,
                 questions: describeCall(call.request.questions ?? [], result?.answers),
                 latencyMs: call.latencyMs,
                 ...usage,
                 attempts: result?.attempts ?? /** @type {any} */ (call.error)?.attempts ?? 1,
-                usd: result ? estimateUsd(name, usage, price) : null,
+                usd,
+                purpose: (call.request.questions ?? []).some((/** @type {any} */ q) => q.id === 'interrupt') ? 'interrupt' : 'decide',
                 ...(call.error ? { error: call.error instanceof Error ? call.error.message : String(call.error) } : {}),
             });
-        }));
+        });
         /** @type {number | null} the goal the guard's counters are about */
         this.guardGoalId = null;
 
@@ -434,8 +441,10 @@ export class TacticalLoop {
             this.onEvent({ type: 'stale', detail: chosen.command });
             return;
         }
-        if (chosen.confidence !== null && chosen.confidence < this.lowConfidence)
+        if (chosen.decisions > 0 && chosen.confidence !== null && chosen.confidence < this.lowConfidence) {
+            this.onEvent({ type: 'low confidence', detail: { goal: goalText, command: chosen.command, confidence: chosen.confidence } });
             this.onLowConfidence?.({ chosen, state, goal: goalText });
+        }
 
         this.lastDecisionAt = Date.now();
         this.onEvent({ type: 'decision', detail: { goal: goalText, ...chosen } });
@@ -665,6 +674,7 @@ export class TacticalLoop {
             running: this.pendingCommand || null,
             lastDecision: this.lastDecision,
             usage: this.guard.usage(),
+            usdSinceStart: this.usdSinceStart,
             restarts: this.restarts,
             goals: this.goals.toJSON().goals.map(q => ({ goal: describeGoal(q.goal), status: q.status })),
         };

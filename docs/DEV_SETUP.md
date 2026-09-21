@@ -208,17 +208,20 @@ to start afresh.
 
 Every provider call and the loop's notable events go to `bots/<name>/decisions.jsonl`, one JSON object per line
 (moved to `.jsonl.1` past 20 MB; `"telemetry": false` in the profile turns it off). A call line has the provider,
-the questions' shapes and answers with confidence, latency, tokens, attempts and an estimated cost (the guard's
-price if set, else a default per provider: jev 0.042/0, openai as gpt-5-nano 0.05/0.40 USD per Mtok in/out).
+the questions' shapes and answers with confidence, latency, tokens, attempts, whether it was a decision or the
+"stop now?" check, and an estimated cost from the provider's own price (`DEFAULT_PRICES`: jev 0.042/0,
+openai:gpt-5-nano 0.05/0.40 USD per Mtok in/out, local ones free; the guard's price only for providers not listed).
 
 ```
 npm run stats                      # every bots/*/decisions.jsonl
 npm run stats -- path/to/a.jsonl   # specific files
 ```
 
-prints the period, decisions per hour, p50/p95 latency, tokens and USD per hour, the stale rate (answers thrown
-away because the world moved on), the low-confidence rate (< 0.6), results, interrupts, goals given up, crashes
-and deaths. The MindServer dashboard shows the current goal, the last decision and today's spend per agent.
+prints the running time (gaps over 5 min count as downtime), decisions per hour, p50/p95 latency of decisions
+and of stop-checks separately, tokens and USD per hour, the stale rate (answers thrown away because the world
+moved on), the low-confidence rate (below the loop's `lowConfidence`, 0.4), results, interrupts, goals given up,
+crashes and deaths. The MindServer dashboard shows the current goal, the last decision and the estimated spend
+since the agent started.
 
 One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
 check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
