@@ -74,7 +74,7 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
  * @property {boolean} [nightShelter] at night, dig in and wait for morning instead of deciding; default true.
  *   Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
- * @property {{name: string, keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null, state?: () => unknown, restore?: (saved: any) => void}} [role]
+ * @property {{name: string, readonly keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null, state?: () => unknown, restore?: (saved: any) => void}} [role]
  *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
  *   loop pursue its goals as usual
  * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)

@@ -29,6 +29,8 @@ export function createGuardRole(options = {}) {
     /** @type {{x: number, y: number, z: number} | null} */
     let post = options.center ? { x: options.center[0], y: options.center[1], z: options.center[2] } : null;
     let wasNight = false;
+    let ready = false;
+    let toldNotReady = false;
 
     return {
         name: 'guard',
@@ -38,8 +40,11 @@ export function createGuardRole(options = {}) {
         restore(saved) {
             if (!options.center && saved?.post && [saved.post.x, saved.post.y, saved.post.z].every(Number.isFinite)) post = saved.post;
         },
-        /** the night routine (dig in and wait) is not for a guard */
-        keepsWatchAtNight: true,
+        /**
+         * A guard keeps watch at night instead of digging in, but only when fit to fight: an iron sword and
+         * armour or a shield. Unequipped it fought everything and died ten times in one night.
+         */
+        get keepsWatchAtNight() { return ready; },
 
         /**
          * @param {{goals: import('../goals.js').GoalQueue, onEvent: (event: {type: string, detail?: unknown}) => void}} loop
@@ -50,6 +55,15 @@ export function createGuardRole(options = {}) {
         step(loop, snapshot, isFood) {
             post ??= { x: Math.floor(snapshot.pos.x), y: Math.floor(snapshot.pos.y), z: Math.floor(snapshot.pos.z) };
             const night = snapshot.dimension === 'overworld' && isNight(snapshot.timeOfDay);
+            const gear = snapshot.inventory;
+            const hadReady = ready;
+            ready = Object.keys(gear).some(name => /(iron|diamond|netherite)_sword$/.test(name))
+                && (Object.keys(gear).some(name => /_chestplate$/.test(name)) || (gear.shield ?? 0) > 0 || (snapshot.armor ?? []).length > 0);
+            if (!ready && !toldNotReady && snapshot.timeOfDay >= 11_000 && snapshot.timeOfDay < 12_000) {
+                toldNotReady = true;
+                options.say?.('装備が揃っていないので、今夜は持ち場の近くで籠もって待機します。');
+            }
+            if (ready && !hadReady) toldNotReady = false;
             if (wasNight && !night) {
                 const tally = options.report?.() ?? { kills: {}, torches: 0 };
                 const kills = Object.entries(tally.kills);
