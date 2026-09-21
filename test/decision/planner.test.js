@@ -193,3 +193,17 @@ test('planning is fast enough to redo on every decision', () => {
     for (let i = 0; i < 50; i++) planGoal(haveTool('diamond', 'pickaxe'), snapshot(), data);
     assert.ok(performance.now() - started < 1000);
 });
+
+test('memory: a log type seen a moment ago beats the everyday oak; one searched for in vain is planned around', () => {
+    const collected = (/** @type {any} */ plan) => plan.steps.filter((/** @type {any} */ s) => s.kind === 'collect').map((/** @type {any} */ s) => s.block);
+    const empty = snapshot();
+    assert.ok(collected(planGoal(haveTool('wooden', 'pickaxe'), empty, data)).includes('oak_log'), 'no memory: oak');
+    assert.ok(collected(planGoal(haveTool('wooden', 'pickaxe'), empty, data, { seen: ['acacia_log'] })).includes('acacia_log'));
+    const withoutOak = collected(planGoal(haveTool('wooden', 'pickaxe'), empty, data, { absent: ['oak_log'] }));
+    assert.ok(!withoutOak.includes('oak_log') && withoutOak.some((/** @type {string} */ b) => b.endsWith('_log')), `planned ${withoutOak}`);
+    // a failed attempt counts even for a log in sight: that one may be on a cliff it cannot reach
+    assert.ok(!collected(planGoal(haveTool('wooden', 'pickaxe'), snapshot({}, ['oak_log']), data, { absent: ['oak_log'] })).includes('oak_log'));
+    // with every source ruled out they all come back, rather than a goal that cannot be planned
+    const coal = planGoal(haveItem('coal', 1), snapshot(), data, { absent: ['coal_ore', 'deepslate_coal_ore'] });
+    assert.deepEqual(coal.unresolved, []);
+});

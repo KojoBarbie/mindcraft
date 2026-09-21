@@ -37,15 +37,36 @@ const STATIONS = ['crafting_table', 'furnace'];
 const MAX_DEPTH = 12;
 
 /**
+ * @typedef {object} PlanMemory what the bot has learnt about its surroundings beyond what is in sight now
+ * @property {Iterable<string>} [seen] block types seen recently: somewhere near, if not in sight
+ * @property {Iterable<string>} [absent] block types searched for and not found: do not plan around them for now
+ */
+
+/**
  * @param {Goal} goal
  * @param {Snapshot} snapshot
  * @param {GameData} data
+ * @param {PlanMemory} [memory]
  * @returns {Plan}
  */
-export function planGoal(goal, snapshot, data) {
+export function planGoal(goal, snapshot, data, memory = {}) {
     /** @type {Record<string, number>} what the bot will hold as the plan unfolds */
     const stock = { ...snapshot.inventory };
     const nearby = new Set(snapshot.blocks.map(block => block.name));
+    const seen = new Set(memory.seen ?? []);
+    const absent = new Set(memory.absent ?? []);
+    // Where an item can be mined, minus what the bot has just failed to find or reach: in a savanna it must not
+    // keep looking for oak because oak is the "everyday" log when acacia is what grows there. This applies even
+    // to a block in sight: "in sight" may be the one log on a cliff it cannot get to. When every source is ruled
+    // out, all of them come back: better a long shot than a goal that cannot be planned at all.
+    // For ranking the ruled-out sources count as gone, so an alternative wins; for actually getting an item
+    // with no alternative they come back (`lastResort`).
+    /** @param {string} item @param {boolean} [lastResort] */
+    const sourcesOf = (item, lastResort = false) => {
+        const all = data.sources(item);
+        const left = all.filter(block => !absent.has(block));
+        return left.length > 0 || !lastResort ? left : all;
+    };
     /** @type {Step[]} */
     const steps = [];
     /** @type {Set<string>} */
@@ -59,8 +80,9 @@ export function planGoal(goal, snapshot, data) {
      */
     function cost(item, count, depth = 0) {
         if ((stock[item] ?? 0) >= count) return 0;
-        const blocks = data.sources(item);
+        const blocks = sourcesOf(item);
         if (blocks.some(block => nearby.has(block))) return 1;
+        if (blocks.some(block => seen.has(block))) return 1.5;
         // out of sight: everyday blocks (trees, stone, common ores) are a short walk away, the rest may be far
         let best = blocks.length === 0 ? Infinity : blocks.some(block => EVERYDAY_BLOCK.test(block)) ? 2 : 4;
         if (depth < 3) {
@@ -129,7 +151,7 @@ export function planGoal(goal, snapshot, data) {
 
         const recipe = bestRecipe(item, missing, next);
         const smeltInput = data.smeltedFrom(item);
-        const blocks = data.sources(item);
+        const blocks = sourcesOf(item, true);
         const animal = data.huntedFrom(item);
 
         /** @type {(() => void)[]} ways to get the item, best first; the first one that works is kept */
@@ -159,7 +181,8 @@ export function planGoal(goal, snapshot, data) {
         // otherwise the bot would go hunting the world for something nobody has built yet.
         if (blocks.length > 0 && (!recipe || blocks.some(name => nearby.has(name)))) routes.push(() => {
             // a block that is in sight beats one that is not; otherwise the plain variant (iron_ore, not deepslate_)
-            const block = blocks.find(name => nearby.has(name)) ?? blocks.find(name => !name.startsWith('deepslate_')) ?? blocks[0];
+            const block = blocks.find(name => nearby.has(name)) ?? blocks.find(name => seen.has(name))
+                ?? blocks.find(name => !name.startsWith('deepslate_')) ?? blocks[0];
             const tools = data.harvestTools(block);
             if (tools) ensureHeld(tools, next, depth + 1);
             steps.push({ kind: 'collect', item, count: missing, block, consumes: {}, requires: tools ? [tools] : [] });

@@ -48,7 +48,7 @@ export function estimateUsd(provider, usage, fallback = {}) {
 export const RECORDED_EVENTS = new Set([
     'start', 'stop', 'decision', 'stale', 'result', 'interrupt', 'banned pick', 'banned', 'shake', 'gave up', 'stuck', 'paused',
     'restored', 'restored after crash', 'retrying failed goals', 'death', 'command timeout', 'error', 'low confidence',
-    'dusk', 'night', 'sheltered', 'dawn',
+    'dusk', 'night', 'sheltered', 'dawn', 'not found', 'idle',
 ]);
 
 /**
