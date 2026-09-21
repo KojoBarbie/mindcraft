@@ -167,15 +167,18 @@ export class GoalQueue {
     }
 
     /**
-     * Death drops the inventory, so goals met by holding things are no longer met. Put them back in the queue;
-     * current() marks any that still hold as done again straight away. Without this a soak run that had made
-     * every stone tool died once and went on to "16 torches" with nothing in its hands.
+     * Death drops the inventory, so tools and food held are gone. Put those goals back in the queue; current()
+     * marks any that still hold as done again straight away. Without this a soak run that had made every stone
+     * tool died once and went on to "16 torches" with nothing in its hands.
+     *
+     * Only tools and food: a have_item goal is often met by something since placed or used (a furnace, torches),
+     * and reopening it would have the bot make it all over again after every death.
      * @returns {number} how many were reopened
      */
     reopenDone() {
         let reopened = 0;
         for (const queued of this.goals) {
-            if (queued.status !== 'done') continue;
+            if (queued.status !== 'done' || (queued.goal.type !== 'have_tool' && queued.goal.type !== 'have_food')) continue;
             queued.status = 'pending';
             queued.failures = 0;
             reopened++;

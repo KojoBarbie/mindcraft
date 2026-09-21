@@ -281,7 +281,9 @@ export class TacticalLoop {
             this.sheltered = null; // respawning elsewhere: that hole is not its to climb out of
             this.pendingCommand = '';
             const reopened = this.goals.reopenDone();
-            this.onEvent({ type: 'death', detail: reopened > 0 ? { reopenedGoals: reopened } : undefined });
+            // Goals a player asked for (strategist.js) come back as ordinary goals at their old priority: the
+            // request was met once, and being first in line again after every death would starve the rest.
+            this.onEvent({ type: 'death', detail: reopened > 0 ? { count: reopened } : undefined });
         });
         on('respawn', () => {
             this.dead = false;
