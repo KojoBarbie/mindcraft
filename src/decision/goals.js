@@ -130,6 +130,19 @@ export class GoalQueue {
         return true;
     }
 
+    /**
+     * Give a goal up at once, whatever its failure count: the loop guard has seen it go nowhere for long enough.
+     * The goals that serve it go with it, as with reportFailure().
+     * @param {number} id
+     * @returns {boolean} true if it was pending
+     */
+    giveUp(id) {
+        const queued = this.goals.find(g => g.id === id);
+        if (!queued || queued.status !== 'pending') return false;
+        queued.status = 'failed';
+        return true;
+    }
+
     /** Progress resets the failure count: three failures in a row give up, not three over a whole session. @param {number} id */
     reportProgress(id) {
         const queued = this.goals.find(g => g.id === id);

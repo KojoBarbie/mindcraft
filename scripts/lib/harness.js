@@ -22,14 +22,14 @@ const SENDER = 'harness_user';
  * @template T
  * @param {Promise<T>[]} contenders
  * @param {number} ms
- * @param {string} message
+ * @param {string | (() => string)} message evaluated when the timeout fires, so it can describe how far things got
  * @returns {Promise<T>}
  */
 async function raceWithTimeout(contenders, ms, message) {
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
     const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), ms);
+        timer = setTimeout(() => reject(new Error(typeof message === 'function' ? message() : message)), ms);
     });
     try {
         return await Promise.race([...contenders, timeout]);
@@ -68,6 +68,7 @@ export async function startHarness(options = {}) {
     /** @type {((message: string) => void) | null} */
     let onOutput = null;
     socket.on('bot-output', (agentName, message) => {
+        if (process.env.HARNESS_TRACE === '1') console.error(`[harness bot-output ${agentName}] ${String(message).slice(0, 160)}`);
         if (agentName === name && onOutput) onOutput(String(message));
     });
 
@@ -97,9 +98,9 @@ export async function startHarness(options = {}) {
                     socket.emit('send-message', name, { from: SENDER, message: command });
                 }),
                 childFailed,
-            ], timeoutMs, collector.sawEcho
+            ], timeoutMs, () => (collector.sawEcho
                 ? `${command} ran but reported nothing within ${timeoutMs} ms (commands must return text)`
-                : `${command} was not picked up within ${timeoutMs} ms`);
+                : `${command} was not picked up within ${timeoutMs} ms`));
         } finally {
             onOutput = null;
         }

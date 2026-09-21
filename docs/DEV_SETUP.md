@@ -148,3 +148,25 @@ this stop?", over a combat-shaped state.
 `"decision_model": "rules"` needs no API key at all: `providers/rules.js` answers from a handful of thresholds
 (flee when hurt and cornered, eat when hungry, otherwise follow the plan). It is the baseline a real model has
 to beat, and it is what the integration test uses to get itself a wooden pickaxe.
+
+### Guard rails (`guard.js`)
+
+What keeps an autonomous bot from being a liability — Mindcraft's own self-prompting loop has none of this, and
+the upstream tracker has a report of it spending $100 in a day on one stuck task:
+
+- **Stall**: if inventory, position (in 8-block cells), health, food and goal have not changed for `stallAfter`
+  decisions, the planned action is taken off the table for a decision ("shake"); after `failAfter` the goal
+  is given up and the queue moves on. This catches commands that keep "succeeding" while nothing happens.
+- **Repeats**: the same command `repeatLimit` times within `repeatWindowMs` is banned for `banForMs`.
+- **Budgets**: decisions, input tokens and estimated USD, per rolling hour and day. When one is used up the
+  loop stops calling the provider — the "should this stop?" question included — until the window frees up.
+  The reflex modes keep the bot alive meanwhile.
+- **Unplannable goals** (a nether star in the overworld) count a failure every `tactical.stuckGoalMs`.
+
+```json
+{ "decision_model": "jev",
+  "guard": { "maxUsdPerDay": 1, "inputUsdPerMillion": 0.042, "stallAfter": 6, "failAfter": 12 },
+  "goals": [{ "type": "have_item", "item": "torch", "count": 16 }] }
+```
+
+`goals` replaces the default survival curriculum with an explicit list, in priority order.
