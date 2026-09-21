@@ -126,7 +126,13 @@ test('commands built by the catalog are accepted and executed by Mindcraft', { t
     await sleep(1000);
     const result = await harness.send(command);
     assert.match(result, /crafted stick/i);
-    // at least the four it crafted; its item_collecting mode may pick up other things lying about
-    const inventory = await harness.send('!inventory');
+    // at least the four it crafted; its item_collecting mode may pick up other things lying about. The crafted
+    // stack reaches the client's inventory a moment after the craft reports success, so look again if needed.
+    let inventory = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+        inventory = await harness.send('!inventory');
+        if (Number(/stick: (\d+)/.exec(inventory)?.[1] ?? 0) >= 4) break;
+        await sleep(500);
+    }
     assert.ok(Number(/stick: (\d+)/.exec(inventory)?.[1] ?? 0) >= 4, inventory);
 });

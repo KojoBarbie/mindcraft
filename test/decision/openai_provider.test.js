@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDecisionProvider, createOpenAIProvider, DecisionError, resilient, validateAnswers } from '../../src/decision/index.js';
-import { schemaFor, toAnswers } from '../../src/decision/providers/openai.js';
+import { lowestEffort, schemaFor, toAnswers } from '../../src/decision/providers/openai.js';
 
 /** @type {import('../../src/decision/types.js').Question[]} */
 const questions = [
@@ -56,17 +56,27 @@ test('the request: strict schema with the options as an enum, minimal reasoning 
     assert.match(init.body.messages[1].content, /action \(choose one of: craft, explore, wait\)/);
 });
 
-test('the answers are converted and pass the shared validation', async () => {
-    const { fn } = fakeFetch({ body: completion(good) });
+test('the answers are converted and pass the shared validation; self-reported confidence is off by default', async () => {
+    const { fn, calls } = fakeFetch({ body: completion(good, { usage: { prompt_tokens: 116, completion_tokens: 17 } }) });
     const result = await createOpenAIProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions });
     validateAnswers(questions, result.answers);
-    assert.deepEqual(result.answers.action, { type: 'choice', value: 'craft', confidence: 0.9 });
-    assert.deepEqual(result.answers.danger, { type: 'noul', value: false, probability: 0.1, confidence: 0.9 });
-    assert.equal(result.inputTokens, 116);
+    assert.deepEqual(result.answers.action, { type: 'choice', value: 'craft', confidence: null });
+    assert.deepEqual(result.answers.danger, { type: 'noul', value: false, probability: 0.1, confidence: null });
+    assert.deepEqual([result.inputTokens, result.outputTokens], [116, 17]);
+    // and it is not asked for, which saves output tokens
+    assert.deepEqual(calls[0].init.body.response_format.json_schema.schema.properties.action.required, ['choice']);
+    assert.doesNotMatch(calls[0].init.body.messages[0].content, /confidence/);
+});
+
+test('self-reported confidence can be asked for explicitly', async () => {
+    const { fn, calls } = fakeFetch({ body: completion(good) });
+    const result = await createOpenAIProvider({ fetch: fn, getKey: () => 'k', selfReportedConfidence: true }).decide({ state: {}, questions });
+    assert.equal(result.answers.action.confidence, 0.9);
+    assert.deepEqual(calls[0].init.body.response_format.json_schema.schema.properties.action.required, ['choice', 'confidence']);
 });
 
 test('out-of-range numbers are pulled back into range rather than failing validation downstream', () => {
-    const answers = toAnswers(questions, { action: { choice: 'wait', confidence: 1.7 }, risk: { value: 42, confidence: -1 }, danger: { probability: 1.3 } });
+    const answers = toAnswers(questions, { action: { choice: 'wait', confidence: 1.7 }, risk: { value: 42, confidence: -1 }, danger: { probability: 1.3 } }, true);
     assert.equal(answers.action.confidence, 1);
     assert.equal(answers.risk.value, 10);
     assert.equal(answers.risk.confidence, 0);
@@ -80,14 +90,48 @@ test('the schema has one required object per question', () => {
     assert.deepEqual(schema.properties.danger.required, ['probability']);
 });
 
-test('non-reasoning models and local servers: no reasoning_effort, no key needed', async () => {
+test('the lowest reasoning effort each model accepts (measured against the API)', () => {
+    assert.equal(lowestEffort('gpt-5-nano'), 'minimal');
+    assert.equal(lowestEffort('gpt-5-mini-2025-08-07'), 'minimal');
+    assert.equal(lowestEffort('gpt-5'), 'minimal');
+    assert.equal(lowestEffort('openai/gpt-5-nano'), 'minimal'); // vendor prefix ignored
+    assert.equal(lowestEffort('gpt-5.1'), 'none');              // rejects minimal
+    assert.equal(lowestEffort('gpt-5.4-nano'), 'none');
+    assert.equal(lowestEffort('gpt-5.6-luna'), 'none');
+    assert.equal(lowestEffort('o4-mini'), 'low');               // rejects minimal and none
+    assert.equal(lowestEffort('o3'), 'low');
+    assert.equal(lowestEffort('gpt-5.2-chat-latest'), null);
+    assert.equal(lowestEffort('gpt-4o-mini'), null);
+    assert.equal(lowestEffort('llama3.2:3b'), null);
+});
+
+test('Ollama: localhost, no key, no reasoning_effort, the older max_tokens too, and a custom name is kept', async () => {
     const { fn, calls } = fakeFetch({ body: completion(good) });
-    const provider = createDecisionProvider({ provider: 'ollama', model: 'llama3.2:3b', fetch: fn });
+    const provider = createDecisionProvider({ provider: 'ollama', fetch: fn });
     assert.equal(provider.name, 'ollama:llama3.2:3b');
     await provider.decide({ state: {}, questions });
-    assert.equal(calls[0].url, 'http://localhost:11434/v1/chat/completions');
-    assert.equal(calls[0].init.body.reasoning_effort, undefined);
-    assert.equal(calls[0].init.headers.Authorization, undefined);
+    const { url, init } = calls[0];
+    assert.equal(url, 'http://localhost:11434/v1/chat/completions');
+    assert.equal(init.body.model, 'llama3.2:3b');
+    assert.equal(init.body.reasoning_effort, undefined);
+    assert.equal(init.headers.Authorization, undefined);
+    assert.equal(init.body.max_tokens, 2000);
+    assert.equal(createDecisionProvider({ provider: 'ollama', name: 'my-box', fetch: fn }).name, 'my-box');
+});
+
+test('the OpenAI key is never sent to another host unless that host names a key', async () => {
+    /** @type {string[]} */
+    const looked = [];
+    const getKey = (/** @type {string} */ name) => { looked.push(name); return `key-for-${name}`; };
+    for (const baseURL of ['https://api.groq.com/openai/v1', 'http://192.168.1.20:8000/v1', 'http://[::1]:11434/v1']) {
+        const { fn, calls } = fakeFetch({ body: completion(good) });
+        await createOpenAIProvider({ baseURL, fetch: fn, getKey }).decide({ state: {}, questions });
+        assert.equal(calls[0].init.headers.Authorization, undefined, baseURL);
+    }
+    assert.deepEqual(looked, []);
+    const { fn, calls } = fakeFetch({ body: completion(good) });
+    await createOpenAIProvider({ baseURL: 'https://api.groq.com/openai/v1', apiKeyName: 'GROQCLOUD_API_KEY', fetch: fn, getKey }).decide({ state: {}, questions });
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer key-for-GROQCLOUD_API_KEY');
 });
 
 test('errors are classified so the resilient wrapper does the right thing', async () => {
@@ -108,6 +152,40 @@ test('errors are classified so the resilient wrapper does the right thing', asyn
     assert.match(limited.message, /nope 429/);
     assert.equal((await failWith(500)).retryable, true);
     assert.equal((await failWith(401)).retryable, false);
+});
+
+test('an empty account is not retried: waiting will not refill it', async () => {
+    const { fn } = fakeFetch({ status: 429, body: { error: { message: 'You exceeded your current quota', code: 'insufficient_quota' } } });
+    await assert.rejects(
+        createOpenAIProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && !error.retryable && /out of credit/.test(error.message),
+    );
+});
+
+test('a non-JSON body (an HTML error page from a proxy) is a transient error, not a provider bug', async () => {
+    const { fn } = fakeFetch({ body: '<html>502 Bad Gateway</html>' });
+    await assert.rejects(
+        createOpenAIProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && error.retryable && /not JSON/.test(error.message),
+    );
+});
+
+test('no answer at all says why: content filter, no choices, a refusal', async () => {
+    const filtered = fakeFetch({ body: { choices: [{ message: { content: null }, finish_reason: 'content_filter' }] } });
+    await assert.rejects(createOpenAIProvider({ fetch: filtered.fn, getKey: () => 'k' }).decide({ state: {}, questions }), /no answer \(finish_reason: content_filter\)/);
+    const none = fakeFetch({ body: { choices: [] } });
+    await assert.rejects(createOpenAIProvider({ fetch: none.fn, getKey: () => 'k' }).decide({ state: {}, questions }), /no choices/);
+    const refused = fakeFetch({ body: { choices: [{ message: { content: null, refusal: 'I cannot help with that' }, finish_reason: 'stop' }] } });
+    await assert.rejects(createOpenAIProvider({ fetch: refused.fn, getKey: () => 'k' }).decide({ state: {}, questions }), /refused/);
+});
+
+test('a network failure (offline) reaches the resilient wrapper as a retryable error', async () => {
+    const offline = /** @type {any} */ (() => Promise.reject(new TypeError('fetch failed')));
+    let attempts = 0;
+    const counting = /** @type {any} */ ((/** @type {any} */ ...args) => { attempts++; return offline(...args); });
+    const chain = resilient([createOpenAIProvider({ fetch: counting, getKey: () => 'k' })], { retries: 2, sleep: () => Promise.resolve() });
+    await assert.rejects(chain.decide({ state: {}, questions }));
+    assert.equal(attempts, 3);
 });
 
 test('running out of tokens (reasoning counts too) and broken JSON are errors, not empty answers', async () => {

@@ -203,3 +203,19 @@ counts reasoning, so a small cap returns an empty answer. The confidence a chat 
 estimate (gpt-5-nano says ~0.65 about answers it gets right every time), not a calibrated probability.
 
 `node scripts/try_provider.js <spec> [runs]` asks a real provider a real question and prints latency and tokens.
+
+### Known problems underneath the decision layer (Mindcraft / mineflayer on 1.21.6)
+
+Found by running the bot for real; they affect any Mindcraft bot, not just this fork.
+
+- **Reflex modes kill the process.** `unstuck` (src/agent/modes.js) arms a 10 s timer while freeing the bot and
+  exits the process if it is still stuck; `ActionManager.stop()` does the same for an action that will not stop
+  (a pathfinder wedged on a cliff). Mindcraft then restarts the agent. The tactical loop therefore never
+  interrupts a `mode:*` action, only commands it fired itself. A restart still loses in-memory state (#11).
+- **x/z become NaN.** Occasionally the bot's position turns NaN on two axes while y and velocity are fine;
+  the next movement packet gets it kicked ("Invalid move player packet received"). `patches/mineflayer+4.33.0.patch`
+  refuses to send non-finite movement packets and restores only the broken axes. The source is not found yet.
+- **allow-flight.** The dev server allows flight because tests edit terrain under bots. A customer server that
+  does not may kick a bot left briefly standing on nothing.
+- **World wear.** Dozens of test runs dig up the spawn area and tests turn flaky. Reset with
+  `npm run dev:server:down && rm -rf server_data_dev && MC_EULA=true npm run dev:server`.

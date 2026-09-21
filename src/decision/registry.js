@@ -20,8 +20,11 @@ const factories = new Map([
     ['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))],
     ['rules', /** @type {ProviderFactory} */ (options => createRulesProvider(options))],
     ['openai', /** @type {ProviderFactory} */ (options => createOpenAIProvider(options))],
-    // Ollama speaks the same API on localhost and needs no key
-    ['ollama', /** @type {ProviderFactory} */ (options => createOpenAIProvider({ baseURL: 'http://localhost:11434/v1', model: 'qwen3:4b', ...options, name: `ollama:${options.model ?? 'qwen3:4b'}` }))],
+    // Ollama speaks the same API on localhost and needs no key. The default is a model that does not think
+    // before answering: a thinking model (qwen3) cannot be told not to through this API and blows the timeout.
+    ['ollama', /** @type {ProviderFactory} */ (options => createOpenAIProvider({
+        baseURL: 'http://localhost:11434/v1', model: 'llama3.2:3b', name: `ollama:${options.model ?? 'llama3.2:3b'}`, ...options,
+    }))],
 ]);
 
 /**

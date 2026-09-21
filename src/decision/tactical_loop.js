@@ -418,14 +418,26 @@ export class TacticalLoop {
      */
     async checkInterrupt(goalText) {
         const epoch = this.epoch;
-        const running = this.agent.actions.currentActionLabel || this.pendingCommand;
+        const label = this.agent.actions.currentActionLabel;
+        // Only ever second-guess a command this loop fired. Anything else running is Mindcraft's reflex layer
+        // (mode:unstuck, mode:self_preservation, ...), which exists to act without asking. Stopping it is
+        // actively harmful: unstuck arms a 10 s timer that kills the whole process if the bot is still stuck,
+        // so interrupting it turns "stuck for a moment" into a crash-and-restart loop.
+        if (!this.pendingCommand || (label && !label.startsWith('action:'))) return;
+        const running = label || this.pendingCommand;
         const settled = Math.max(this.commandStartedAt, this.lastInterruptAt) + this.settleMs;
         if (Date.now() < settled) return; // give it a moment to make progress before second-guessing it
         const snapshot = this.snapshotFor(goalText);
-        const state = compressState(snapshot, { view: 'combat' });
+        // the goal is part of the picture: without it a model sees "collecting logs" and asks "why?"
+        const state = { ...compressState(snapshot, { view: 'combat' }), goal: goalText };
         const result = await this.provider.decide({
             state,
-            questions: [{ id: 'interrupt', type: 'noul', prompt: `The bot is busy with "${running}". Should it stop right now and do something else?` }],
+            questions: [{
+                id: 'interrupt', type: 'noul',
+                prompt: `The bot is busy with "${running}" as part of its goal. Is there an emergency that means it must `
+                    + 'stop right now, such as a hostile mob attacking, very low health, lava, or drowning? '
+                    + 'Answer no if it is safe to carry on.',
+            }],
         });
         const answer = result.answers.interrupt;
         this.lastDecisionAt = Date.now();

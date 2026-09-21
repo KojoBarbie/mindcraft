@@ -39,6 +39,83 @@ index 70db312..93d2054 100644
        })
      }
    }
+diff --git a/node_modules/mineflayer/lib/plugins/physics.js b/node_modules/mineflayer/lib/plugins/physics.js
+index 0bcf679..93bc3af 100644
+--- a/node_modules/mineflayer/lib/plugins/physics.js
++++ b/node_modules/mineflayer/lib/plugins/physics.js
+@@ -75,7 +75,36 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+     }
+   }
+ 
++  // mindcraft fork: never let a non-finite position reach the server. On 1.21.x the bot's x/z occasionally
++  // become NaN (seen after taking damage and after server position corrections); the next movement packet then
++  // gets the bot kicked with "Invalid move player packet received". Put it back where it last was instead.
++  let lastGoodPosition = null
++  bot.nanRecoveries = 0
++  function repairNonFinitePosition () {
++    const pos = bot.entity.position
++    if (Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
++      if (lastGoodPosition) lastGoodPosition.update(pos)
++      else lastGoodPosition = pos.clone()
++      return
++    }
++    bot.nanRecoveries++
++    const vel = bot.entity.velocity
++    console.warn(`[physics] non-finite position (${pos.x}, ${pos.y}, ${pos.z}), velocity (${vel.x}, ${vel.y}, ${vel.z}); ` +
++      `restoring ${lastGoodPosition ? lastGoodPosition.toString() : 'nothing (no finite position seen yet)'} [#${bot.nanRecoveries}]`)
++    // Only the broken axes come back. y is finite and still under gravity, so a bot that was falling keeps
++    // falling; pinning it to an old mid-air position would look like flying and get it kicked for that instead.
++    if (lastGoodPosition) {
++      if (!Number.isFinite(pos.x)) pos.x = lastGoodPosition.x
++      if (!Number.isFinite(pos.y)) pos.y = lastGoodPosition.y
++      if (!Number.isFinite(pos.z)) pos.z = lastGoodPosition.z
++    }
++    if (!Number.isFinite(vel.x)) vel.x = 0
++    if (!Number.isFinite(vel.y)) vel.y = 0
++    if (!Number.isFinite(vel.z)) vel.z = 0
++  }
++
+   function tickPhysics (now) {
++    repairNonFinitePosition()
+     if (bot.blockAt(bot.entity.position) == null) return // check if chunk is unloaded
+     if (bot.physicsEnabled && shouldUsePhysics) {
+       physics.simulatePlayer(new PlayerState(bot, controlState), world).apply(bot)
+@@ -97,7 +126,19 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+     doPhysicsTimer = null
+   }
+ 
++  // mindcraft fork: a movement packet with a NaN or infinite coordinate, yaw or pitch gets the bot kicked
++  // ("Invalid move player packet received"). Drop such a packet rather than send it; the next good one follows
++  // within a tick. Covers every writer, including a look whose pitch came out of asin(dy / 0).
++  bot.invalidMovePacketsDropped = 0
++  function refuse (kind, ...values) {
++    if (values.every(Number.isFinite)) return false
++    bot.invalidMovePacketsDropped++
++    console.warn(`[physics] dropped a ${kind} packet with non-finite values ${JSON.stringify(values.map(String))} [#${bot.invalidMovePacketsDropped}]`)
++    return true
++  }
++
+   function sendPacketPosition (position, onGround) {
++    if (refuse('position', position.x, position.y, position.z, lastSent.yaw, lastSent.pitch)) return
+     // sends data, no logic
+     const oldPos = new Vec3(lastSent.x, lastSent.y, lastSent.z)
+     lastSent.x = position.x
+@@ -110,6 +151,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+   }
+ 
+   function sendPacketLook (yaw, pitch, onGround) {
++    if (refuse('look', lastSent.x, lastSent.y, lastSent.z, yaw, pitch)) return
+     // sends data, no logic
+     const oldPos = new Vec3(lastSent.x, lastSent.y, lastSent.z)
+     lastSent.yaw = yaw
+@@ -122,6 +164,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+ 
+   function sendPacketPositionAndLook (position, yaw, pitch, onGround) {
+     // sends data, no logic
++    if (refuse('position_look', position.x, position.y, position.z, yaw, pitch)) return
+     const oldPos = new Vec3(lastSent.x, lastSent.y, lastSent.z)
+     lastSent.x = position.x
+     lastSent.y = position.y
 diff --git a/node_modules/mineflayer/lib/plugins/place_block.js b/node_modules/mineflayer/lib/plugins/place_block.js
 index fdaec6b..08983b6 100644
 --- a/node_modules/mineflayer/lib/plugins/place_block.js
