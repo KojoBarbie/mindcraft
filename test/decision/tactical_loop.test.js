@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import mcdata from 'minecraft-data';
-import { GoalQueue, LoopGuard, TacticalLoop, createGameData, createRulesProvider, haveItem, haveTool, resilient } from '../../src/decision/index.js';
+import { GoalQueue, LoopGuard, TacticalLoop, createGameData, createRulesProvider, haveFood, haveItem, haveTool, resilient } from '../../src/decision/index.js';
 
 const registry = mcdata('1.21.6');
 const data = createGameData(registry);
@@ -816,4 +816,14 @@ test('progress: walking about counts only for commands meant to move; gains alwa
     assert.equal(loop.madeProgress(before, '!moveAway(32)'), true);
     agent.bot.inventory.items = () => [{ name: 'oak_log', count: 3 }];
     assert.equal(loop.madeProgress(before, '!collectBlocks("oak_log", 3)'), true);
+});
+
+test('a search that finds no creature is not a failure of the goal, and the next move is to explore', () => {
+    const agent = fakeAgent();
+    const { loop, queue } = loopFor(agent, {}, [haveFood(4)]);
+    const id = queue.toJSON().goals[0].id;
+    for (let i = 0; i < 4; i++)
+        loop.record('!searchForEntity("cow", 64)', 'Action output: Could not find any cow in 64 blocks.', id, loop.progressSignature(loop.rawSnapshot()));
+    assert.equal(queue.toJSON().goals[0].status, 'pending', 'four searches in vain do not give the goal up');
+    assert.ok(loop.planMemory().absentEntities.includes('cow'));
 });

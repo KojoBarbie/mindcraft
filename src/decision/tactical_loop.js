@@ -156,6 +156,10 @@ export class TacticalLoop {
         /** @type {Map<string, number>} block type -> when it was last in sight */
         this.seenBlocks = new Map();
         this.idleSaid = false;
+        /** @type {Map<string, number>} creature -> when it was last in sight */
+        this.seenEntities = new Map();
+        /** @type {Map<string, {until: number, x: number, z: number}>} creature -> until when, and where, a search for it failed */
+        this.absentEntities = new Map();
         /** @type {Map<string, {until: number, x: number, z: number}>} block type -> until when, and where, a search for it failed */
         this.absentBlocks = new Map();
         this.nightShelter = options.nightShelter ?? true;
@@ -443,12 +447,17 @@ export class TacticalLoop {
         const focus = plan.steps.length > 0 ? focusFor(plan.steps[0], snapshot) : null;
         if (this.noteStuck(queued.id, plan.unresolved, goalText)) return; // given up: the next tick takes the next goal
 
-        // When the planned target is out of sight, offer "go and look for it" in place of the step itself.
-        const searching = focus && !focus.inSight ? SEARCH_FOR[/** @type {keyof typeof SEARCH_FOR} */ (focus.action)] : undefined;
+        // When the planned target is out of sight, offer "go and look for it" in place of the step itself; when a
+        // search for it here has just failed, walk somewhere new instead of searching the same area again.
+        let searching = focus && !focus.inSight ? SEARCH_FOR[/** @type {keyof typeof SEARCH_FOR} */ (focus.action)] : undefined;
+        const memory = this.planMemory();
+        const searchedInVain = !!searching && !!focus?.target
+            && (searching === 'search_for_block' ? memory.absent : memory.absentEntities).includes(focus.target);
+        if (searchedInVain) searching = 'explore';
         const ctx = {
             snapshot,
             knowledge: createKnowledge(this.agent.bot, snapshot),
-            wanted: searching && focus?.target
+            wanted: searching && searching !== 'explore' && focus?.target
                 ? (searching === 'search_for_block' ? { blocks: [focus.target] } : { entities: [focus.target] })
                 : undefined,
         };
@@ -458,7 +467,7 @@ export class TacticalLoop {
         // is not on offer and the model has to try something else.
         const shaking = verdict.action === 'shake';
         const banned = new Set(verdict.banned ?? []);
-        const presetFor = /** @param {string} id */ id => ({ target: focus?.target, quantity: searching ? undefined : focus?.quantity });
+        const presetFor = /** @param {string} id */ id => (id === 'explore' ? { quantity: 32 } : { target: focus?.target, quantity: searching ? undefined : focus?.quantity });
         let planned = wanted && possible.has(wanted) && !shaking ? wanted : null;
         // A banned planned command is dropped before asking, not after: a paid call that picks it would be wasted.
         if (planned && banned.has(buildPlannedCommand(ctx, planned, presetFor(planned)))) planned = null;
@@ -541,6 +550,12 @@ export class TacticalLoop {
             return false;
         }
 
+        // Under a roof of rock (mining, a cave) it is not out in the open: carry on as by day. Checked before
+        // anything is stopped, or the loop stops a command at dusk only to start another one next tick.
+        const bot = this.agent.bot;
+        const feet = bot.entity?.position?.floored?.();
+        if (!this.sheltered && feet && !this.enclosed() && hasCover(pos => bot.blockAt(pos), feet)) return false;
+
         const label = this.agent.actions.currentActionLabel || '';
         const ours = !label || label.startsWith('action:'); // not a reflex (mode:*)
         if (this.pendingCommand) {
@@ -563,8 +578,6 @@ export class TacticalLoop {
         this.nightBusyWith = '';
         this.stoppingForNight = false;
 
-        const bot = this.agent.bot;
-        const feet = bot.entity?.position?.floored?.();
         if (this.enclosed()) {
             if (!this.shelterAnnounced) this.onEvent({ type: 'sheltered', detail: 'waiting for morning' });
             this.shelterAnnounced = true;
@@ -572,8 +585,6 @@ export class TacticalLoop {
             this.persist();
             return true;
         }
-        // Under a roof of rock (mining, a cave) it is not out in the open: carry on as by day.
-        if (!this.sheltered && feet && hasCover(pos => bot.blockAt(pos), feet)) return false;
         if (this.nightAttempts >= 3) {
             this.nightGivenUp = true;
             this.onEvent({ type: 'night', detail: 'could not make a shelter; carrying on' });
@@ -721,11 +732,13 @@ export class TacticalLoop {
         if (epoch !== this.epoch) return; // the loop was stopped while this command was running
         const progressed = this.madeProgress(before, command);
         const said = output.replace(BENIGN, '').replace(/\s+/g, ' ').trim();
-        this.noteAbsence(command, said);
+        // A search that found nothing is a fact about this place, not a failure of the goal: the planner takes
+        // another source or the bot explores. Counting it made a food goal give up in three seconds.
+        const notHere = this.noteAbsence(command, said) && /^!search/.test(command);
 
         // A command this loop cut short, and one that came back with nothing to show for itself, say nothing
         // about whether the goal is reachable. Counting either would make the three-strikes rule meaningless.
-        const inconclusive = !countsTowardGoal || this.interruptedCommand === command || (!progressed && said === '');
+        const inconclusive = !countsTowardGoal || notHere || this.interruptedCommand === command || (!progressed && said === '');
         if (this.interruptedCommand === command) this.interruptedCommand = '';
 
         const ok = progressed || !FAILURE.test(said);
@@ -745,10 +758,11 @@ export class TacticalLoop {
         this.persist();
     }
 
-    /** @param {{blocks: {name: string}[]}} snapshot */
+    /** @param {{blocks: {name: string}[], entities?: {name: string, kind: string}[]}} snapshot */
     rememberSeen(snapshot) {
         const now = Date.now();
         for (const block of snapshot.blocks) this.seenBlocks.set(block.name, now);
+        for (const entity of snapshot.entities ?? []) if (entity.kind === 'passive') this.seenEntities.set(entity.name, now);
     }
 
     /**
@@ -758,12 +772,17 @@ export class TacticalLoop {
     planMemory() {
         const now = Date.now();
         const pos = this.agent.bot?.entity?.position;
-        for (const [name, at] of this.seenBlocks) if (now - at > 10 * 60_000) this.seenBlocks.delete(name);
-        for (const [name, a] of this.absentBlocks) {
-            const far = pos && Number.isFinite(pos.x) && Math.hypot(pos.x - a.x, pos.z - a.z) > 48;
-            if (a.until <= now || far) this.absentBlocks.delete(name);
-        }
-        return { seen: [...this.seenBlocks.keys()], absent: [...this.absentBlocks.keys()] };
+        for (const seen of [this.seenBlocks, this.seenEntities])
+            for (const [name, at] of seen) if (now - at > 10 * 60_000) seen.delete(name);
+        for (const absent of [this.absentBlocks, this.absentEntities])
+            for (const [name, a] of absent) {
+                const far = pos && Number.isFinite(pos.x) && Math.hypot(pos.x - a.x, pos.z - a.z) > 48;
+                if (a.until <= now || far) absent.delete(name);
+            }
+        return {
+            seen: [...this.seenBlocks.keys()], absent: [...this.absentBlocks.keys()],
+            seenEntities: [...this.seenEntities.keys()], absentEntities: [...this.absentEntities.keys()],
+        };
     }
 
     /**
@@ -774,14 +793,16 @@ export class TacticalLoop {
      */
     noteAbsence(command, output) {
         // Only a search that found none at all: "No more X" means some were collected, so X is there.
-        const target = /^!(?:searchForBlock|collectBlocks)\("(\w+)"/.exec(command)?.[1];
+        const [, verb, target] = /^!(searchForBlock|collectBlocks|searchForEntity)\("(\w+)"/.exec(command) ?? [];
         const missing = /Could not find any (\w+) in [\d.]+ blocks|No (\w+) nearby to collect/.exec(output);
         const name = missing?.[1] ?? missing?.[2];
-        if (!name || name !== target) return;
+        if (!name || name !== target) return false;
         const pos = this.agent.bot?.entity?.position;
-        this.absentBlocks.set(name, { until: Date.now() + 10 * 60_000, x: pos?.x ?? 0, z: pos?.z ?? 0 });
-        this.seenBlocks.delete(name);
-        this.onEvent({ type: 'not found', detail: { block: name, command } });
+        const entity = verb === 'searchForEntity';
+        (entity ? this.absentEntities : this.absentBlocks).set(name, { until: Date.now() + 10 * 60_000, x: pos?.x ?? 0, z: pos?.z ?? 0 });
+        (entity ? this.seenEntities : this.seenBlocks).delete(name);
+        this.onEvent({ type: 'not found', detail: { [entity ? 'entity' : 'block']: name, command } });
+        return true;
     }
 
     /**

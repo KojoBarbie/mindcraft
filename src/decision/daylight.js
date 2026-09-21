@@ -36,6 +36,10 @@ export function isEnclosedAt(blockAt, feet) {
  * @param {{offset: (x: number, y: number, z: number) => any}} feet
  */
 export function hasCover(blockAt, feet, range = 24) {
-    for (let dy = 2; dy <= range; dy++) if (blockAt(feet.offset(0, dy, 0))?.boundingBox === 'block') return true;
+    for (let dy = 2; dy <= range; dy++) {
+        const block = /** @type {{boundingBox?: string, name?: string} | null | undefined} */ (blockAt(feet.offset(0, dy, 0)));
+        // a tree is not a roof: under its leaves the bot stood in the open and was stopped and restarted all dusk
+        if (block?.boundingBox === 'block' && !/leaves|_log$|_wood$|_stem$|mushroom_block|vine/.test(block.name ?? '')) return true;
+    }
     return false;
 }

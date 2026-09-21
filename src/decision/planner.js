@@ -40,6 +40,8 @@ const MAX_DEPTH = 12;
  * @typedef {object} PlanMemory what the bot has learnt about its surroundings beyond what is in sight now
  * @property {Iterable<string>} [seen] block types seen recently: somewhere near, if not in sight
  * @property {Iterable<string>} [absent] block types searched for and not found: do not plan around them for now
+ * @property {Iterable<string>} [seenEntities] creatures seen recently
+ * @property {Iterable<string>} [absentEntities] creatures searched for and not found
  */
 
 /**
@@ -223,8 +225,15 @@ export function planGoal(goal, snapshot, data, memory = {}) {
         case 'have_food': {
             const good = goodFood(snapshot, data.isFood); // the same definition isDone() uses
             const held = Object.entries(stock).reduce((sum, [name, n]) => sum + (good(name) ? n : 0), 0);
-            const MEAT = { cow: 'beef', pig: 'porkchop', sheep: 'mutton' }; // raw chicken is not good food
-            const animal = snapshot.entities.find(e => e.kind === 'passive' && e.name in MEAT)?.name ?? 'cow';
+            const MEAT = { cow: 'beef', pig: 'porkchop', sheep: 'mutton', rabbit: 'rabbit' }; // raw chicken is not good food
+            // One in sight; else one seen lately; else one not already searched for in vain (a food run that
+            // only ever looked for cows gave up in three seconds on a savanna full of sheep).
+            const seenAnimals = new Set(memory.seenEntities ?? []);
+            const missing = new Set(memory.absentEntities ?? []);
+            const animal = snapshot.entities.find(e => e.kind === 'passive' && e.name in MEAT)?.name
+                ?? Object.keys(MEAT).find(name => seenAnimals.has(name) && !missing.has(name))
+                ?? Object.keys(MEAT).find(name => !missing.has(name))
+                ?? 'cow';
             if (held < goal.count)
                 steps.push({ kind: 'hunt', item: MEAT[/** @type {keyof typeof MEAT} */ (animal)], count: goal.count - held, from: animal, consumes: {}, requires: [] });
             break;

@@ -2123,7 +2123,9 @@ function canDigShaft(bot, feet) {
         if (block.name === 'lava' || block.name === 'water' || block.name === 'bedrock') return false;
         if (!block.canHarvest(null) && !tools.some(id => block.canHarvest(id))) return false;
     }
-    return true;
+    // and something to land on: digDown stops at a drop, and a cave under the hole means no shelter
+    const floor = bot.blockAt(feet.offset(0, -4, 0));
+    return !!floor && floor.boundingBox === 'block';
 }
 
 // mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall (a roof of them lands
