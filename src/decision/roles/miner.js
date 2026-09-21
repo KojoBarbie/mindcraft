@@ -78,10 +78,12 @@ export function createMinerRole(options = {}) {
             }
             // underground there are zombies and creepers too: two of five deaths in one run
             if (onSurface && !Object.keys(inv).some(name => name.endsWith('_sword'))) short.push(() => ensureGoal(loop.goals, haveTool('stone', 'sword'), 986));
-            if (onSurface && (inv.stick ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('stick', 8), 985));
+            // spare sticks for two pickaxes; asking for eight made the loop gather sticks, spend them on torches
+            // and a sword, and gather them again for a whole day
+            if (onSurface && (inv.stick ?? 0) < 4) short.push(() => ensureGoal(loop.goals, haveItem('stick', 4), 985));
             if (onSurface && !(inv.crafting_table > 0)) short.push(() => ensureGoal(loop.goals, haveItem('crafting_table', 1), 984));
-            if (onSurface && (inv.torch ?? 0) < 16) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
-            if (onSurface && food < 6) short.push(() => ensureGoal(loop.goals, haveFood(8), 995));
+            if (onSurface && (inv.torch ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('torch', 8), 990));
+            if (onSurface && food < 4) short.push(() => ensureGoal(loop.goals, haveFood(4), 995));
             if (short.length > 0) {
                 for (const queue of short) queue();
                 return null;
