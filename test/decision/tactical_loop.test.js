@@ -763,3 +763,28 @@ test('isNight: the boundaries', async () => {
     assert.equal(isNight(NIGHT_END - 1), true);
     assert.equal(isNight(NIGHT_END), false);
 });
+
+test('after a death, goals that were met by holding things are back in the queue', async () => {
+    const agent = fakeAgent({ inventory: { wooden_pickaxe: 1 } });
+    const { loop, queue } = loopFor(agent, {}, [haveTool('wooden', 'pickaxe'), haveTool('stone', 'pickaxe')]);
+    loop.start();
+    await loop.decide();
+    assert.equal(queue.toJSON().goals[0].status, 'done');
+    agent.bot.inventory.items = () => [];
+    agent.bot.emit('death');
+    assert.equal(queue.toJSON().goals[0].status, 'pending');
+    agent.bot.emit('respawn');
+    assert.equal(queue.current(loop.rawSnapshot(), data.isFood)?.id, queue.toJSON().goals[0].id, 'the wooden pickaxe comes first again');
+    await loop.stop();
+});
+
+test('after a death a placed furnace or used torches are not made all over again', () => {
+    const queue = new GoalQueue();
+    const furnace = queue.add(haveItem('furnace'));
+    const food = queue.add({ type: 'have_food', count: 4 });
+    const pickaxe = queue.add(haveTool('stone', 'pickaxe'));
+    for (const q of queue.goals) q.status = 'done';
+    assert.equal(queue.reopenDone(), 2);
+    const status = Object.fromEntries(queue.toJSON().goals.map(q => [q.id, q.status]));
+    assert.deepEqual([status[furnace], status[food], status[pickaxe]], ['done', 'pending', 'pending']);
+});
