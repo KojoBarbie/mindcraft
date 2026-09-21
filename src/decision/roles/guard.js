@@ -89,7 +89,12 @@ export function createGuardRole(options = {}) {
 
             // evening or night and away from the post (gear-gathering took it far): go back first
             const away = Math.hypot(snapshot.pos.x - post.x, snapshot.pos.z - post.z);
-            if (away > radius * 2 && (night || snapshot.timeOfDay >= 11_000)) return `!goToward(${post.x}, ${post.z})`;
+            if (away > radius * 2 && (night || snapshot.timeOfDay >= 11_000)) {
+                // deep in a cave (it went down for iron): no path home from there, and the unstuck reflex stopped
+                // fifty tries at one. Up to the surface first.
+                if (snapshot.pos.y < post.y - 16) return '!goToSurface';
+                return `!goToward(${post.x}, ${post.z})`;
+            }
 
             // by day, get what the night needs; by night, make do with what there is
             if (!night) {

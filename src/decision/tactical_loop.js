@@ -49,7 +49,7 @@ export function mealToHeal(raw, isFood) {
 }
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
-const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToward'];
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToward', '!goToSurface'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };
@@ -419,7 +419,8 @@ export class TacticalLoop {
             this.onEvent({ type: 'error', detail: message });
             // the same error tick after tick is a goal the loop cannot pursue (a plan the catalog refuses): a guard
             // repeated one for 25 minutes. Give the goal up so the loop, and the strategist, move on.
-            this.errorStreak = message === this.lastError ? (this.errorStreak ?? 0) + 1 : 1;
+            // a provider that is down (Jev: Service Unavailable) says nothing about the goal: not counted
+            this.errorStreak = /^All decision providers failed/.test(message) ? 0 : message === this.lastError ? (this.errorStreak ?? 0) + 1 : 1;
             this.lastError = message;
             if (this.errorStreak >= 5 && this.guardGoalId != null) {
                 this.goals.giveUp(this.guardGoalId);
