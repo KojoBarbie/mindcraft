@@ -20,7 +20,7 @@ test('guard: the post survives a restart, and at dusk a guard far from it goes b
     const again = createGuardRole();
     again.restore(saved);
     const far = again.step(l, snap({ pos: { x: 300, y: 70, z: 300 }, inventory: kit, timeOfDay: 11_500 }), isFood);
-    assert.equal(far, '!goToCoordinates(0, 64, 0, 3)');
+    assert.equal(far, '!goToward(0, 0)');
     const home = again.step(l, snap({ inventory: kit, timeOfDay: 14_000 }), isFood);
     assert.match(String(home), /^!patrol\(0, 64, 0, 24\)$/);
 });
@@ -36,7 +36,7 @@ test('guard: by day, missing gear becomes goals and the loop pursues them', () =
 test('miner: equipped on the surface it goes down; underground without a pickaxe it makes a stone one first', () => {
     const role = createMinerRole({ center: [10, 20] });
     const l = loop();
-    const equipped = { iron_pickaxe: 1, torch: 32, bread: 8, stick: 8, crafting_table: 1 };
+    const equipped = { iron_pickaxe: 1, stone_sword: 1, torch: 32, bread: 8, stick: 8, crafting_table: 1 };
     assert.equal(role.step(l, snap({ inventory: equipped }), isFood), '!descendTo(-58)');
     assert.equal(role.step(l, snap({ inventory: equipped, pos: { x: 0, y: -58, z: 0 } }), isFood), '!branchMine(10, 20, 48)');
     const bare = createMinerRole();

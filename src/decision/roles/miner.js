@@ -76,6 +76,8 @@ export function createMinerRole(options = {}) {
                 if (!onSurface && !(inv.stone_pickaxe > 0)) short.push(() => ensureGoal(loop.goals, haveTool('stone', 'pickaxe'), 1010));
                 short.push(() => ensureGoal(loop.goals, haveTool('iron', 'pickaxe'), 1000));
             }
+            // underground there are zombies and creepers too: two of five deaths in one run
+            if (onSurface && !Object.keys(inv).some(name => name.endsWith('_sword'))) short.push(() => ensureGoal(loop.goals, haveTool('stone', 'sword'), 986));
             if (onSurface && (inv.stick ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('stick', 8), 985));
             if (onSurface && !(inv.crafting_table > 0)) short.push(() => ensureGoal(loop.goals, haveItem('crafting_table', 1), 984));
             if (onSurface && (inv.torch ?? 0) < 16) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));

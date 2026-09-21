@@ -31,7 +31,7 @@ import { createStrategist, isAddressedTo } from './strategist.js';
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
-const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToCoordinates'];
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToward'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };

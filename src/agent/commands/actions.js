@@ -218,6 +218,17 @@ export const actionsList = [
         })
     },
     {
+        name: '!goToward',
+        description: 'Walk towards a far point one leg at a time (call again for the next leg).',
+        params: {
+            'x': { type: 'float', description: 'x of the point.', domain: [-30000000, 30000000] },
+            'z': { type: 'float', description: 'z of the point.', domain: [-30000000, 30000000] },
+        },
+        perform: runAsAction(async (agent, x, z) => {
+            await skills.goToward(agent.bot, x, z);
+        })
+    },
+    {
         name: '!explore',
         description: 'Walk to somewhere new, keeping the same direction from one call to the next, to find things that are not nearby.',
         params: {'distance': { type: 'float', description: 'How far to walk this time.', domain: [8, 256] }},
