@@ -98,6 +98,14 @@ async function stepInto(bot, cell) {
     return Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && Math.abs(Math.floor(p.y) - cell.y) <= 1;
 }
 
+/** Put a block where a floor is missing, from what mining has piled up in the inventory. */
+async function fillFloor(bot, pos) {
+    const filler = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'tuff', 'andesite', 'diorite', 'granite']
+        .find(name => bot.inventory.items().some(item => item.name === name));
+    if (!filler) return false;
+    return await placeBlock(bot, filler, pos.x, pos.y, pos.z, 'bottom', true).catch(() => false) && solid(bot.blockAt(pos));
+}
+
 async function placeTorchBehind(bot, feet, heading) {
     if (!bot.inventory.items().some(item => item.name === 'torch')) return;
     const spot = feet.offset(-heading[0], 0, -heading[1]);
@@ -124,9 +132,7 @@ async function tunnel(bot, heading, length, found, within) {
         if (!solid(floor)) {
             if (isLiquid(floor) || nearLiquid(bot, next.offset(0, -1, 0))) return { dug, stopped: 'lava or water below' };
             // a hole in the floor: fill it with what was dug, so the tunnel stays walkable
-            const filler = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'tuff'].find(n => bot.inventory.items().some(item => item.name === n));
-            if (!filler || !await placeBlock(bot, filler, next.x, next.y - 1, next.z, 'bottom', true).catch(() => false))
-                return { dug, stopped: 'a drop in the floor' };
+            if (!await fillFloor(bot, next.offset(0, -1, 0))) return { dug, stopped: 'a drop in the floor' };
         }
         if (!await stepInto(bot, next)) return { dug, stopped: 'could not step forward' };
         dug++;
@@ -158,7 +164,11 @@ export async function descendTo(bot, targetY) {
             if (result !== 'ok') { blocked = result; break; }
         }
         const floor = bot.blockAt(step.offset(0, -1, 0));
-        if (!blocked && !solid(floor)) blocked = isLiquid(floor) || nearLiquid(bot, step.offset(0, -1, 0)) ? 'danger' : 'drop';
+        if (!blocked && !solid(floor)) {
+            // a cave under the next stair: put a floor in it, as a player would, unless lava or water is there
+            if (isLiquid(floor) || nearLiquid(bot, step.offset(0, -1, 0))) blocked = 'danger';
+            else if (!await fillFloor(bot, step.offset(0, -1, 0))) blocked = 'drop';
+        }
         if (blocked) {
             if (++turns > 4) {
                 log(bot, `Cannot go further down from ${feet}: ${blocked} in every direction.`);
