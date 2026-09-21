@@ -788,3 +788,15 @@ test('after a death a placed furnace or used torches are not made all over again
     const status = Object.fromEntries(queue.toJSON().goals.map(q => [q.id, q.status]));
     assert.deepEqual([status[furnace], status[food], status[pickaxe]], ['done', 'pending', 'pending']);
 });
+
+test('a search that finds nothing makes the loop plan without that block for a while', () => {
+    const agent = fakeAgent();
+    const { loop, events } = loopFor(agent);
+    loop.record('!searchForBlock("oak_log", 64)', 'Action output: Could not find any oak_log in 64 blocks.', 1, loop.progressSignature(loop.rawSnapshot()));
+    assert.deepEqual([...loop.planMemory().absent], ['oak_log']);
+    assert.ok(events.some(e => e.type === 'not found' && e.detail.block === 'oak_log'));
+    loop.record('!collectBlocks("birch_log", 3)', 'Action output: No birch_log nearby to collect.', 1, loop.progressSignature(loop.rawSnapshot()));
+    assert.ok([...loop.planMemory().absent].includes('birch_log'));
+    loop.absentBlocks.set('oak_log', Date.now() - 1);
+    assert.ok(![...loop.planMemory().absent].includes('oak_log'), 'it expires');
+});

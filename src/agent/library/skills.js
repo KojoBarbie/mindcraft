@@ -7,6 +7,25 @@ import settings from "../../../settings.js";
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
 
+
+// mindcraft fork: places the bot failed to reach, remembered for a while so that the "nearest" block is not the
+// same unreachable one every time (a soak run walked to the same log on a cliff 29 times).
+const UNREACHABLE_MS = 5 * 60_000;
+function unreachableKey(pos) {
+    return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
+}
+export function markUnreachable(bot, pos) {
+    bot.unreachable ??= new Map();
+    bot.unreachable.set(unreachableKey(pos), Date.now() + UNREACHABLE_MS);
+}
+export function isUnreachable(bot, pos) {
+    const until = bot.unreachable?.get(unreachableKey(pos));
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    bot.unreachable.delete(unreachableKey(pos));
+    return false;
+}
+
 export function log(bot, message) {
     bot.output += message + '\n';
 }
@@ -461,6 +480,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                     }
                 }
             }
+            if (isUnreachable(bot, block.position)) return false;
             if (isLiquid) {
                 // collect only source blocks
                 return block.metadata === 0;
@@ -517,6 +537,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             else {
                 log(bot, `Failed to collect ${blockType}: ${err}.`);
+                if (/NoPath|Timeout|goal was changed/i.test(String(err))) markUnreachable(bot, block.position);
                 continue;
             }
         }
@@ -1260,15 +1281,16 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
         block = blocks[0];
     }
     else {
-        block = world.getNearestBlock(bot, blockType, range);
+        block = world.getNearestBlocksWhere(bot, b => b.name === blockType && !isUnreachable(bot, b.position), range, 1)[0] ?? null;
     }
     if (!block) {
-        log(bot, `Could not find any ${blockType} in ${range} blocks.`);
+        log(bot, `Could not find any ${blockType} in ${range} blocks${bot.unreachable?.size ? ' that it has not already failed to reach' : ''}.`);
         return false;
     }
     log(bot, `Found ${blockType} at ${block.position}. Navigating...`);
-    await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
-    return true;
+    const reached = await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
+    if (!reached && !bot.interrupt_code) markUnreachable(bot, block.position);
+    return reached;
 }
 
 export async function goToNearestEntity(bot, entityType, min_distance=2, range=64) {
@@ -1421,7 +1443,14 @@ export async function moveAway(bot, distance) {
         }
     }
 
-    await goToGoal(bot, inverted_goal);
+    try {
+        await goToGoal(bot, inverted_goal);
+    } catch (err) {
+        // mindcraft fork: boxed in (a cliff, water, a hole) is a failure to report, not an exception
+        if (!/NoPath|Timeout/i.test(String(err))) throw err;
+        log(bot, `Could not move away from ${pos.floored()}: no path.`);
+        return false;
+    }
     let new_pos = bot.entity.position;
     log(bot, `Moved away from ${pos.floored()} to ${new_pos.floored()}.`);
     return true;

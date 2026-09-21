@@ -153,6 +153,10 @@ export class TacticalLoop {
         this.goalsFingerprint = options.goalsFingerprint ?? '';
         this.crashBanMs = options.crashBanMs ?? 5 * 60_000;
         this.retryFailedAfterMs = options.retryFailedAfterMs ?? 30 * 60_000;
+        /** @type {Map<string, number>} block type -> when it was last in sight */
+        this.seenBlocks = new Map();
+        /** @type {Map<string, number>} block type -> until when to plan as if there were none (a search failed) */
+        this.absentBlocks = new Map();
         this.nightShelter = options.nightShelter ?? true;
         this.nightMaxMs = options.nightMaxMs ?? 12 * 60_000;
         /** @type {{y: number, at: number} | null} where and when it dug in: at dawn it climbs out from there */
@@ -421,7 +425,8 @@ export class TacticalLoop {
             this.guardGoalId = null;
             return;
         }
-        const plan = planGoal(queued.goal, snapshot, this.data);
+        this.rememberSeen(snapshot);
+        const plan = planGoal(queued.goal, snapshot, this.data, this.planMemory());
         const focus = plan.steps.length > 0 ? focusFor(plan.steps[0], snapshot) : null;
         if (this.noteStuck(queued.id, plan.unresolved, goalText)) return; // given up: the next tick takes the next goal
 
@@ -703,6 +708,7 @@ export class TacticalLoop {
         if (epoch !== this.epoch) return; // the loop was stopped while this command was running
         const progressed = this.madeProgress(before);
         const said = output.replace(BENIGN, '').replace(/\s+/g, ' ').trim();
+        this.noteAbsence(command, said);
 
         // A command this loop cut short, and one that came back with nothing to show for itself, say nothing
         // about whether the goal is reachable. Counting either would make the three-strikes rule meaningless.
@@ -719,6 +725,35 @@ export class TacticalLoop {
         }
         this.onEvent({ type: 'result', detail: { command, ok, progressed, inconclusive, output: said } });
         this.persist();
+    }
+
+    /** @param {{blocks: {name: string}[]}} snapshot */
+    rememberSeen(snapshot) {
+        const now = Date.now();
+        for (const block of snapshot.blocks) this.seenBlocks.set(block.name, now);
+    }
+
+    /** What the planner should know beyond the current view: seen in the last 10 minutes, and not found lately. */
+    planMemory() {
+        const now = Date.now();
+        for (const [name, at] of this.seenBlocks) if (now - at > 10 * 60_000) this.seenBlocks.delete(name);
+        for (const [name, until] of this.absentBlocks) if (until <= now) this.absentBlocks.delete(name);
+        return { seen: this.seenBlocks.keys(), absent: this.absentBlocks.keys() };
+    }
+
+    /**
+     * A search that found nothing says the block is not around here: plan without it for a while (10 minutes),
+     * so an alternative (another kind of log) gets its turn.
+     * @param {string} command
+     * @param {string} output
+     */
+    noteAbsence(command, output) {
+        const missing = /Could not find any (\w+) in \d+ blocks|No (?:more )?(\w+) nearby to collect/.exec(output);
+        const name = missing?.[1] ?? missing?.[2];
+        if (!name || !/^!(searchForBlock|collectBlocks)\(/.test(command)) return;
+        this.absentBlocks.set(name, Date.now() + 10 * 60_000);
+        this.seenBlocks.delete(name);
+        this.onEvent({ type: 'not found', detail: { block: name, command } });
     }
 
     /**
