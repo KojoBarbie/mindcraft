@@ -32,6 +32,19 @@ export class DecisionError extends Error {
     }
 }
 
+/**
+ * A Retry-After header, in seconds or as an HTTP date.
+ * @param {string | null | undefined} header
+ * @returns {number | undefined} milliseconds
+ */
+export function retryAfterMs(header) {
+    if (!header) return undefined;
+    const seconds = Number(header);
+    if (Number.isFinite(seconds)) return seconds * 1000;
+    const at = Date.parse(header);
+    return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+}
+
 /** Thrown when every provider in the chain has failed. `errors` holds the last error of each provider. */
 export class AllProvidersFailedError extends DecisionError {
     /**

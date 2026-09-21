@@ -6,7 +6,7 @@
 // A chat model's stated confidence is its own estimate, not a calibrated probability like a decision model (Jev)
 // gives: gpt-5-nano says ~0.65 about answers it gets right every time. Mixing the two in one threshold would make
 // "ask a bigger model when unsure" fire on every nano decision, so it is left out unless asked for.
-import { DecisionError } from '../errors.js';
+import { DecisionError, retryAfterMs } from '../errors.js';
 
 /** @typedef {import('../types.js').DecisionProvider} DecisionProvider */
 /** @typedef {import('../types.js').Question} Question */
@@ -79,7 +79,7 @@ export function schemaFor(questions, withConfidence = false) {
 /** @param {Question[]} questions */
 function describeQuestions(questions) {
     return questions.map(q => {
-        if (q.type === 'choice') return `- ${q.id} (choose one of: ${q.options.join(', ')}): ${q.prompt}`;
+        if (q.type === 'choice') return `- ${q.id} (choose one of: ${q.options.map(o => (q.hints?.[o] ? `${o} = ${q.hints[o]}` : o)).join(q.hints ? '; ' : ', ')}): ${q.prompt}`;
         if (q.type === 'score') return `- ${q.id} (a number from ${q.min} to ${q.max}): ${q.prompt}`;
         return `- ${q.id} (yes/no): ${q.prompt}`;
     }).join('\n');
@@ -112,15 +112,6 @@ export function toAnswers(questions, raw, withConfidence = false) {
         }
     }
     return answers;
-}
-
-/** @param {string | null} header seconds or an HTTP date */
-function retryAfterMs(header) {
-    if (!header) return undefined;
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) return seconds * 1000;
-    const at = Date.parse(header);
-    return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
 }
 
 /**

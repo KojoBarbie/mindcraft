@@ -9,6 +9,8 @@
  * @property {'choice'} type
  * @property {string} prompt
  * @property {string[]} options at least one, unique
+ * @property {Record<string, string>} [hints] what an option means, where its name alone does not say; each
+ *   provider puts these where its model reads them best (Jev: the option's criterion; chat models: the prompt)
  */
 
 /**
