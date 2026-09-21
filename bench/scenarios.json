@@ -1,0 +1,20 @@
+{
+  "note": "Scenarios for scripts/bench.js. Each starts from a freshly restored world at the world spawn, in easy difficulty. `goal` is a decision-layer goal (src/decision/goals.js); `text` is how the task is put to a chat model (configuration a) or a player (configuration c).",
+  "scenarios": [
+    { "id": "wooden_pickaxe", "minutes": 6, "time": 1000,
+      "goal": { "type": "have_tool", "tool": "pickaxe", "tier": "wooden" },
+      "text": "Get yourself a wooden pickaxe." },
+    { "id": "stone_pickaxe", "minutes": 10, "time": 1000,
+      "goal": { "type": "have_tool", "tool": "pickaxe", "tier": "stone" },
+      "text": "Get yourself a stone pickaxe." },
+    { "id": "food", "minutes": 8, "time": 1000,
+      "goal": { "type": "have_food", "count": 4 },
+      "text": "Gather at least 4 pieces of food." },
+    { "id": "survive_night", "minutes": 9, "time": 12000, "survive": true,
+      "goal": { "type": "have_tool", "tool": "pickaxe", "tier": "wooden" },
+      "text": "Night is coming. Stay alive until morning, and get a wooden pickaxe if you can." },
+    { "id": "iron_pickaxe", "minutes": 20, "time": 1000,
+      "goal": { "type": "have_tool", "tool": "pickaxe", "tier": "iron" },
+      "text": "Get yourself an iron pickaxe." }
+  ]
+}
