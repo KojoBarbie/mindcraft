@@ -467,6 +467,9 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                 }
             }
             if (isUnreachable(bot, block.position)) return false;
+            // mindcraft fork: a block touching lava lets it out when mined (a miner died "trying to swim in lava")
+            if (!isLiquid && block.position && [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+                .some(([dx, dy, dz]) => bot.blockAt(block.position.offset(dx, dy, dz))?.name === 'lava')) return false;
             if (isLiquid) {
                 // collect only source blocks
                 return block.metadata === 0;
