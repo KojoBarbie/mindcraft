@@ -70,6 +70,11 @@ async function main() {
     // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
     // began inside the previous night's shelter).
     if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
+    // --give iron_pickaxe:1,torch:32 : a starting kit, to try one part of a role without waiting for the rest
+    for (const entry of opt('give', '').split(',').filter(Boolean)) {
+        const [item, count] = entry.split(':');
+        await rcon(`give ${name} minecraft:${item} ${Number(count || 1)}`);
+    }
     /** @type {any} */
     let latest = null;
     const feed = io(`http://localhost:${port}`);

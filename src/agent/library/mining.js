@@ -73,6 +73,31 @@ async function mineExposedOres(bot, found) {
     if (Object.keys(found).length > 0) await pickupNearbyItems(bot);
 }
 
+/**
+ * Walk into the next cell of a tunnel or staircase this code has just dug: face its centre and walk until the
+ * bot's feet are in it (dropping down a stair on the way). The pathfinder is no use here: asked for an exact
+ * block it reports "Unable to reach, you are 1 blocks away" from the middle of it.
+ * @returns {Promise<boolean>}
+ */
+async function stepInto(bot, cell) {
+    const target = new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
+    const deadline = Date.now() + 4000;
+    try {
+        while (Date.now() < deadline && !bot.interrupt_code) {
+            const p = bot.entity.position;
+            const inCell = Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z;
+            if (inCell && Math.abs(p.x - target.x) < 0.35 && Math.abs(p.z - target.z) < 0.35 && bot.entity.onGround && Math.floor(p.y) === cell.y) return true;
+            await bot.lookAt(new Vec3(target.x, p.y + 1.6, target.z), true);
+            bot.setControlState('forward', !(inCell && Math.hypot(p.x - target.x, p.z - target.z) < 0.25));
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+    } finally {
+        bot.clearControlStates();
+    }
+    const p = bot.entity.position;
+    return Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && Math.abs(Math.floor(p.y) - cell.y) <= 1;
+}
+
 async function placeTorchBehind(bot, feet, heading) {
     if (!bot.inventory.items().some(item => item.name === 'torch')) return;
     const spot = feet.offset(-heading[0], 0, -heading[1]);
@@ -103,7 +128,7 @@ async function tunnel(bot, heading, length, found, within) {
             if (!filler || !await placeBlock(bot, filler, next.x, next.y - 1, next.z, 'bottom', true).catch(() => false))
                 return { dug, stopped: 'a drop in the floor' };
         }
-        if (!await goToPosition(bot, next.x, next.y, next.z, 0)) return { dug, stopped: 'could not step forward' };
+        if (!await stepInto(bot, next)) return { dug, stopped: 'could not step forward' };
         dug++;
         await mineExposedOres(bot, found);
         if (dug % 10 === 0) await placeTorchBehind(bot, next, heading);
@@ -143,7 +168,7 @@ export async function descendTo(bot, targetY) {
             continue;
         }
         turns = 0;
-        if (!await goToPosition(bot, step.x, step.y, step.z, 0)) {
+        if (!await stepInto(bot, step)) {
             log(bot, `Could not step down to ${step}.`);
             return false;
         }
@@ -192,7 +217,8 @@ export async function branchMine(bot, center = null, radius = 48, branchLength =
         const branch = await tunnel(bot, heading, branchLength, found, within);
         dug += branch.dug;
         if (branch.stopped === 'interrupted') break;
-        await goToPosition(bot, junction.x, junction.y, junction.z, 0); // back to the main tunnel
+        await goToPosition(bot, junction.x, junction.y, junction.z, 1); // back to the main tunnel
+        await stepInto(bot, junction);
     }
     const diamonds = bot.inventory.items().filter(item => item.name === 'diamond').reduce((n, item) => n + item.count, 0);
     log(bot, `Branch mined ${dug} blocks around ${junction}.${summarise(found)} Holding ${diamonds} diamond.`);
