@@ -80,6 +80,9 @@ async function main() {
         },
     });
     await rcon(`clear ${name}`);
+    // a run starts well: health and hunger are kept in the world from the last run (one began at 5 health)
+    await rcon(`effect give ${name} minecraft:instant_health 1 10`);
+    await rcon(`effect give ${name} minecraft:saturation 1 20`);
     // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
     // began inside the previous night's shelter).
     if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);

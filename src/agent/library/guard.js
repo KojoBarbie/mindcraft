@@ -47,6 +47,26 @@ function darkSpot(bot, center, radius) {
     return best?.pos ?? null;
 }
 
+const ARMOR_SLOT = { helmet: ['head', 5], chestplate: ['torso', 6], leggings: ['legs', 7], boots: ['feet', 8] };
+const TIERS = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
+
+/**
+ * Put on the armour and the shield it carries. mineflayer-armor-manager's equipAll() did nothing on 1.21: a
+ * guard went on patrol with two iron chestplates in its bag and died to zombies.
+ * @param {MinecraftBot} bot
+ */
+export async function wearGear(bot) {
+    for (const [piece, [dest, slot]] of Object.entries(ARMOR_SLOT)) {
+        const worn = bot.inventory.slots[slot];
+        const best = bot.inventory.items().filter(item => item.name.endsWith(`_${piece}`))
+            .sort((a, b) => TIERS.indexOf(b.name.split('_')[0]) - TIERS.indexOf(a.name.split('_')[0]))[0];
+        if (!best || (worn && TIERS.indexOf(worn.name.split('_')[0]) >= TIERS.indexOf(best.name.split('_')[0]))) continue;
+        await bot.equip(best, /** @type {any} */ (dest)).catch(() => {});
+    }
+    const shield = bot.inventory.items().find(item => item.name === 'shield');
+    if (shield && bot.inventory.slots[45]?.name !== 'shield') await bot.equip(shield, 'off-hand').catch(() => {});
+}
+
 /**
  * One step of guarding the area of `radius` around `center`.
  * @param {MinecraftBot} bot
@@ -57,7 +77,7 @@ function darkSpot(bot, center, radius) {
 export async function patrol(bot, center, radius = 24) {
     const s = stats(bot);
     const post = new Vec3(center.x, center.y, center.z);
-    try { bot.armorManager?.equipAll(); } catch { /* nothing to wear */ } // armour handed over is not always put on
+    await wearGear(bot);
 
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)
@@ -76,6 +96,12 @@ export async function patrol(bot, center, radius = 24) {
     const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e) && !NEUTRAL.includes(e.name)).length;
     const hurt = bot.health < 12;
     if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
+        // attackEntity counts a mob out of 24 blocks as killed: a creeper across the area was "killed" 83 times
+        // while the guard stood still and zombies took it apart. Close in first.
+        if (enemy.position.distanceTo(bot.entity.position) > 16) {
+            await goToGoal(bot, new pf.goals.GoalNear(enemy.position.x, enemy.position.y, enemy.position.z, 4)).catch(() => {});
+            return `closed in on ${enemy.name}`;
+        }
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);
         // counted only when the game says it died: attackEntity also returns once the mob is out of sight, and
         // counting that made a night's tally read 401 skeletons

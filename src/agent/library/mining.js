@@ -227,7 +227,15 @@ function summarise(found) {
 export async function branchMine(bot, center = null, radius = 48, branchLength = 12) {
     bot.mineHeading ??= Math.floor(Math.random() * 4);
     const origin = center ?? bot.entity.position;
-    const within = pos => Math.hypot(pos.x - origin.x, pos.z - origin.z) <= radius;
+    const dist = pos => Math.hypot(pos.x - origin.x, pos.z - origin.z);
+    // outside the area (the way down came out far from it: 128 blocks once) a step towards it is allowed, or
+    // every heading is "the edge" and it turned on the spot 162 times without digging a block
+    const within = pos => dist(pos) <= radius || dist(pos) < dist(bot.entity.position) - 0.5;
+    if (dist(bot.entity.position) > radius) {
+        const here = bot.entity.position;
+        bot.mineHeading = HEADINGS.map((h, i) => ({ i, d: dist({ x: here.x + h[0] * 8, z: here.z + h[1] * 8 }) })).sort((a, b) => a.d - b.d)[0].i;
+        log(bot, `Outside the area (${Math.round(dist(here))} blocks from its centre): tunnelling back towards it.`);
+    }
     const found = {};
     let dug = 0;
     let main = HEADINGS[bot.mineHeading % 4];
