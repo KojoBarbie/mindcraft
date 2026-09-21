@@ -155,7 +155,8 @@ export class TacticalLoop {
         this.retryFailedAfterMs = options.retryFailedAfterMs ?? 30 * 60_000;
         /** @type {Map<string, number>} block type -> when it was last in sight */
         this.seenBlocks = new Map();
-        /** @type {Map<string, number>} block type -> until when to plan as if there were none (a search failed) */
+        this.idleSaid = false;
+        /** @type {Map<string, {until: number, x: number, z: number}>} block type -> until when, and where, a search for it failed */
         this.absentBlocks = new Map();
         this.nightShelter = options.nightShelter ?? true;
         this.nightMaxMs = options.nightMaxMs ?? 12 * 60_000;
@@ -397,9 +398,11 @@ export class TacticalLoop {
         if (revived > 0) this.onEvent({ type: 'retrying failed goals', detail: { count: revived } });
         const queued = this.goals.current(this.rawSnapshot(), this.data.isFood);
         if (!queued) {
-            this.onEvent({ type: 'idle', detail: 'no goals left' });
+            if (!this.idleSaid) this.onEvent({ type: 'idle', detail: 'no goals left' }); // once, not every tick
+            this.idleSaid = true;
             return;
         }
+        this.idleSaid = false;
         const goalText = describeGoal(queued.goal);
         this.currentGoal = goalText;
         if (queued.id !== this.guardGoalId) {
@@ -721,7 +724,12 @@ export class TacticalLoop {
 
         if (!inconclusive) {
             if (ok) this.goals.reportProgress(goalId);
-            else this.goals.reportFailure(goalId);
+            else if (this.goals.reportFailure(goalId)) {
+                // said out loud: the strategist takes "gave up" as its cue to suggest something else, and a goal
+                // that fails silently leaves a bot standing idle with nobody the wiser (seen in a demo run)
+                const queued = this.goals.toJSON().goals.find(q => q.id === goalId);
+                this.onEvent({ type: 'gave up', detail: { goal: queued ? describeGoal(queued.goal) : String(goalId), reason: `failed three times; last: ${said.slice(0, 120)}` } });
+            }
         }
         this.onEvent({ type: 'result', detail: { command, ok, progressed, inconclusive, output: said } });
         this.persist();
@@ -733,12 +741,19 @@ export class TacticalLoop {
         for (const block of snapshot.blocks) this.seenBlocks.set(block.name, now);
     }
 
-    /** What the planner should know beyond the current view: seen in the last 10 minutes, and not found lately. */
+    /**
+     * What the planner should know beyond the current view: seen in the last 10 minutes, and not found lately
+     * near here. A failed search says nothing about a place 48 blocks away, so moving that far forgets it.
+     */
     planMemory() {
         const now = Date.now();
+        const pos = this.agent.bot?.entity?.position;
         for (const [name, at] of this.seenBlocks) if (now - at > 10 * 60_000) this.seenBlocks.delete(name);
-        for (const [name, until] of this.absentBlocks) if (until <= now) this.absentBlocks.delete(name);
-        return { seen: this.seenBlocks.keys(), absent: this.absentBlocks.keys() };
+        for (const [name, a] of this.absentBlocks) {
+            const far = pos && Number.isFinite(pos.x) && Math.hypot(pos.x - a.x, pos.z - a.z) > 48;
+            if (a.until <= now || far) this.absentBlocks.delete(name);
+        }
+        return { seen: [...this.seenBlocks.keys()], absent: [...this.absentBlocks.keys()] };
     }
 
     /**
@@ -748,10 +763,13 @@ export class TacticalLoop {
      * @param {string} output
      */
     noteAbsence(command, output) {
-        const missing = /Could not find any (\w+) in \d+ blocks|No (?:more )?(\w+) nearby to collect/.exec(output);
+        // Only a search that found none at all: "No more X" means some were collected, so X is there.
+        const target = /^!(?:searchForBlock|collectBlocks)\("(\w+)"/.exec(command)?.[1];
+        const missing = /Could not find any (\w+) in [\d.]+ blocks|No (\w+) nearby to collect/.exec(output);
         const name = missing?.[1] ?? missing?.[2];
-        if (!name || !/^!(searchForBlock|collectBlocks)\(/.test(command)) return;
-        this.absentBlocks.set(name, Date.now() + 10 * 60_000);
+        if (!name || name !== target) return;
+        const pos = this.agent.bot?.entity?.position;
+        this.absentBlocks.set(name, { until: Date.now() + 10 * 60_000, x: pos?.x ?? 0, z: pos?.z ?? 0 });
         this.seenBlocks.delete(name);
         this.onEvent({ type: 'not found', detail: { block: name, command } });
     }
@@ -804,6 +822,11 @@ export class TacticalLoop {
                 restarts: this.restarts,
                 guardGoalId: this.guardGoalId,
                 sheltered: this.sheltered,
+                memory: {
+                    seen: [...this.seenBlocks],
+                    absent: [...this.absentBlocks],
+                    unreachable: [...(this.agent.bot?.unreachable ?? [])], // skills.js: places it failed to reach
+                },
                 suspect: options.clean ? null : this.suspect(),
             },
         };
@@ -834,6 +857,18 @@ export class TacticalLoop {
                     .map((/** @type {[number, number]} */ [id, since]) => [id, since + age]));
         }
         this.restarts = Number.isInteger(loop.restarts) && loop.restarts >= 0 ? loop.restarts : 0;
+        // what it learnt about its surroundings: a crash restart must not send it back to the same cliff
+        const memory = loop.memory ?? {};
+        const now = Date.now();
+        for (const e of Array.isArray(memory.seen) ? memory.seen : [])
+            if (Array.isArray(e) && typeof e[0] === 'string' && Number.isFinite(e[1])) this.seenBlocks.set(e[0], e[1]);
+        for (const e of Array.isArray(memory.absent) ? memory.absent : [])
+            if (Array.isArray(e) && typeof e[0] === 'string' && e[1] && e[1].until > now) this.absentBlocks.set(e[0], e[1]);
+        const bot = this.agent.bot;
+        if (bot && Array.isArray(memory.unreachable)) {
+            bot.unreachable ??= new Map();
+            for (const e of memory.unreachable) if (Array.isArray(e) && typeof e[0] === 'string' && e[1] > now) bot.unreachable.set(e[0], e[1]);
+        }
         // so a restart at night still climbs out at dawn; a shelter from another night is history
         const shelter = loop.sheltered;
         this.sheltered = shelter && Number.isFinite(shelter.y) && Number.isFinite(shelter.at) && Date.now() - shelter.at < 15 * 60_000
@@ -943,7 +978,7 @@ export async function attachTacticalLoop(agent) {
         onLowConfidence: ({ chosen, goal }) =>
             strategist?.consult({ kind: 'low_confidence', detail: { goal, command: chosen.command, confidence: chosen.confidence } }, strategyContext()),
     });
-    const strategyContext = () => ({ snapshot: loop.rawSnapshot(), goals: loop.goals, currentGoal: loop.currentGoal || null, recent: loop.recent });
+    const strategyContext = () => ({ snapshot: loop.rawSnapshot(), goals: loop.goals, currentGoal: loop.currentGoal || null, recent: loop.recent, memory: loop.planMemory() });
     if (profile.strategy_model) {
         // A strategist that cannot be set up (a typo in the model name, no key) must not take the tactical loop
         // down with it: the bot carries on without one.

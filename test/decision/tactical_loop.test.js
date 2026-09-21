@@ -797,6 +797,12 @@ test('a search that finds nothing makes the loop plan without that block for a w
     assert.ok(events.some(e => e.type === 'not found' && e.detail.block === 'oak_log'));
     loop.record('!collectBlocks("birch_log", 3)', 'Action output: No birch_log nearby to collect.', 1, loop.progressSignature(loop.rawSnapshot()));
     assert.ok([...loop.planMemory().absent].includes('birch_log'));
-    loop.absentBlocks.set('oak_log', Date.now() - 1);
+    loop.absentBlocks.set('oak_log', { until: Date.now() - 1, x: 0, z: 0 });
     assert.ok(![...loop.planMemory().absent].includes('oak_log'), 'it expires');
+    loop.record('!collectBlocks("stone", 3)', 'Action output: Collected 2 stone. No more stone nearby to collect.', 1, loop.progressSignature(loop.rawSnapshot()));
+    assert.ok(![...loop.planMemory().absent].includes('stone'), '"no more" means some were there');
+    loop.record('!searchForBlock("coal", 64)', 'Action output: Could not find any iron_ore in 64 blocks.', 1, loop.progressSignature(loop.rawSnapshot()));
+    assert.ok(![...loop.planMemory().absent].includes('iron_ore'), 'only the block the command was after');
+    loop.absentBlocks.set('sand', { until: Date.now() + 60_000, x: 500, z: 500 });
+    assert.ok(![...loop.planMemory().absent].includes('sand'), 'recorded far from here: forgotten');
 });

@@ -54,11 +54,19 @@ export function planGoal(goal, snapshot, data, memory = {}) {
     const stock = { ...snapshot.inventory };
     const nearby = new Set(snapshot.blocks.map(block => block.name));
     const seen = new Set(memory.seen ?? []);
-    const absent = new Set([...(memory.absent ?? [])].filter(name => !nearby.has(name)));
-    // Where an item can be mined, minus what a search has just failed to find: in a savanna the bot must not
-    // keep looking for oak because oak is the "everyday" log when acacia is what grows there.
-    /** @param {string} item */
-    const sourcesOf = item => data.sources(item).filter(block => !absent.has(block));
+    const absent = new Set(memory.absent ?? []);
+    // Where an item can be mined, minus what the bot has just failed to find or reach: in a savanna it must not
+    // keep looking for oak because oak is the "everyday" log when acacia is what grows there. This applies even
+    // to a block in sight: "in sight" may be the one log on a cliff it cannot get to. When every source is ruled
+    // out, all of them come back: better a long shot than a goal that cannot be planned at all.
+    // For ranking the ruled-out sources count as gone, so an alternative wins; for actually getting an item
+    // with no alternative they come back (`lastResort`).
+    /** @param {string} item @param {boolean} [lastResort] */
+    const sourcesOf = (item, lastResort = false) => {
+        const all = data.sources(item);
+        const left = all.filter(block => !absent.has(block));
+        return left.length > 0 || !lastResort ? left : all;
+    };
     /** @type {Step[]} */
     const steps = [];
     /** @type {Set<string>} */
@@ -143,7 +151,7 @@ export function planGoal(goal, snapshot, data, memory = {}) {
 
         const recipe = bestRecipe(item, missing, next);
         const smeltInput = data.smeltedFrom(item);
-        const blocks = sourcesOf(item);
+        const blocks = sourcesOf(item, true);
         const animal = data.huntedFrom(item);
 
         /** @type {(() => void)[]} ways to get the item, best first; the first one that works is kept */

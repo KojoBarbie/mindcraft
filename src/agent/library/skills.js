@@ -1,5 +1,7 @@
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
+import { isUnreachable, markUnreachable, pruneUnreachable } from "./unreachable.js";
+export { isUnreachable, markUnreachable } from "./unreachable.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
@@ -8,23 +10,6 @@ const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_
 const useDelay = blockPlaceDelay > 0;
 
 
-// mindcraft fork: places the bot failed to reach, remembered for a while so that the "nearest" block is not the
-// same unreachable one every time (a soak run walked to the same log on a cliff 29 times).
-const UNREACHABLE_MS = 5 * 60_000;
-function unreachableKey(pos) {
-    return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
-}
-export function markUnreachable(bot, pos) {
-    bot.unreachable ??= new Map();
-    bot.unreachable.set(unreachableKey(pos), Date.now() + UNREACHABLE_MS);
-}
-export function isUnreachable(bot, pos) {
-    const until = bot.unreachable?.get(unreachableKey(pos));
-    if (until === undefined) return false;
-    if (until > Date.now()) return true;
-    bot.unreachable.delete(unreachableKey(pos));
-    return false;
-}
 
 export function log(bot, message) {
     bot.output += message + '\n';
@@ -517,7 +502,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                 success = await useToolOnBlock(bot, 'bucket', block);
             }
             else if (mc.mustCollectManually(blockType)) {
-                await goToPosition(bot, block.position.x, block.position.y, block.position.z, 2);
+                if (!await goToPosition(bot, block.position.x, block.position.y, block.position.z, 2)) {
+                    if (!bot.interrupt_code) markUnreachable(bot, block.position);
+                    continue;
+                }
                 await bot.dig(block);
                 await pickupNearbyItems(bot);
                 success = true;
@@ -537,7 +525,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             else {
                 log(bot, `Failed to collect ${blockType}: ${err}.`);
-                if (/NoPath|Timeout|goal was changed/i.test(String(err))) markUnreachable(bot, block.position);
+                // only "there is no way there": a timeout may be a slow search, a changed goal someone else's doing
+                if (/NoPath/.test(String(err)) && !bot.interrupt_code) markUnreachable(bot, block.position);
                 continue;
             }
         }
@@ -1284,7 +1273,7 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
         block = world.getNearestBlocksWhere(bot, b => b.name === blockType && !isUnreachable(bot, b.position), range, 1)[0] ?? null;
     }
     if (!block) {
-        log(bot, `Could not find any ${blockType} in ${range} blocks${bot.unreachable?.size ? ' that it has not already failed to reach' : ''}.`);
+        log(bot, `Could not find any ${blockType} in ${range} blocks${pruneUnreachable(bot) ? ' that it has not already failed to reach' : ''}.`);
         return false;
     }
     log(bot, `Found ${blockType} at ${block.position}. Navigating...`);
