@@ -34,6 +34,11 @@ test('guard: keeps watch at night only when fit to fight', () => {
     assert.equal(role.keepsWatchAtNight, true);
     const bare = createGuardRole();
     assert.equal(bare.step(loop(), snap({ inventory: { stone_sword: 1 }, timeOfDay: 18000 }), isFood), null, 'no round it cannot fight');
+    const worn = createGuardRole();
+    const lw = loop();
+    worn.step(lw, snap({ inventory: { iron_sword: 1, torch: 24, bread: 4, shield: 1 }, armor: ['iron_chestplate'] }), isFood);
+    assert.equal(worn.keepsWatchAtNight, true, 'what it wears counts');
+    assert.ok(!lw.goals.toJSON().goals.some(q => /chestplate|shield/.test(JSON.stringify(q.goal))), 'and is not made again');
 });
 
 test('guard: tells where its post is once, so exploring for gear stays near it', () => {
@@ -59,6 +64,7 @@ test('miner: equipped on the surface it goes down; underground without a pickaxe
     const l = loop();
     const equipped = { iron_pickaxe: 1, stone_sword: 1, torch: 8, bread: 4, stick: 4, crafting_table: 1 };
     assert.equal(role.step(l, snap({ inventory: equipped }), isFood), '!descendTo(-58)');
+    assert.equal(role.step(l, snap({ inventory: equipped, pos: { x: 140, y: 70, z: 20 } }), isFood), '!goToward(10, 20)', 'far off: back to the centre before going down');
     assert.equal(role.step(l, snap({ inventory: equipped, pos: { x: 0, y: -58, z: 0 } }), isFood), '!branchMine(10, 20, 48)');
     const bare = createMinerRole();
     const l2 = loop();

@@ -214,3 +214,11 @@ test('food: an animal seen lately, else one not searched for in vain; never only
     assert.equal(hunted(planGoal(haveFood(4), snapshot(), data, { absentEntities: ['cow'] })), 'pig');
     assert.equal(hunted(planGoal(haveFood(4), snapshot(), data, { seenEntities: ['sheep'], absentEntities: ['cow'] })), 'sheep');
 });
+
+test('a crafting table out of craftRecipe\'s reach does not count: the plan makes one', () => {
+    const inventory = { iron_ingot: 8, oak_planks: 4 };
+    const far = /** @type {any} */ ({ inventory, entities: [], blocks: [{ name: 'crafting_table', dist: 24, dy: 0 }] });
+    assert.deepEqual(texts(planGoal(haveItem('iron_chestplate', 1), far, data)), ['craft 1 crafting_table', 'craft 1 iron_chestplate']);
+    const near = /** @type {any} */ ({ inventory, entities: [], blocks: [{ name: 'crafting_table', dist: 6, dy: 0 }] });
+    assert.deepEqual(texts(planGoal(haveItem('iron_chestplate', 1), near, data)), ['craft 1 iron_chestplate']);
+});

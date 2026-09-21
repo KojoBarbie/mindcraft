@@ -43,7 +43,8 @@ export function isDone(goal, snapshot, isFood) {
     const inventory = snapshot.inventory;
     switch (goal.type) {
         case 'have_item':
-            return (inventory[goal.item] ?? 0) >= goal.count;
+            // armour being worn is still had: counted only in the bag, a chestplate put on was made again
+            return (inventory[goal.item] ?? 0) + (snapshot.armor ?? []).filter(name => name === goal.item).length >= goal.count;
         case 'have_tool':
             return Object.keys(inventory).some(name =>
                 inventory[name] > 0 && name.endsWith(`_${goal.tool}`) && tierRank(name) >= tierRank(`${goal.tier}_${goal.tool}`));

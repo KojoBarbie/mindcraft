@@ -34,6 +34,7 @@ const FUELS = ['coal', 'charcoal'];
 const COMMON_MATERIAL = /^oak_|^cobblestone$/;
 const EVERYDAY_BLOCK = /_log$|^(stone|dirt|sand|gravel|coal_ore|iron_ore|copper_ore|clay|short_grass)$/;
 const STATIONS = ['crafting_table', 'furnace'];
+const STATION_RANGE = 16;
 const MAX_DEPTH = 12;
 
 /**
@@ -55,6 +56,10 @@ export function planGoal(goal, snapshot, data, memory = {}) {
     /** @type {Record<string, number>} what the bot will hold as the plan unfolds */
     const stock = { ...snapshot.inventory };
     const nearby = new Set(snapshot.blocks.map(block => block.name));
+    // a station counts only within the 16 blocks craftRecipe and smeltItem look in (and the catalog offers
+    // crafting with). A table 20 blocks off made the plan "craft an iron chestplate" that the catalog refused:
+    // a guard spent 25 minutes on that error with the iron in hand.
+    const stationNear = (/** @type {string} */ name) => snapshot.blocks.some(block => block.name === name && (block.dist ?? 0) <= STATION_RANGE);
     const seen = new Set(memory.seen ?? []);
     const absent = new Set(memory.absent ?? []);
     // Where an item can be mined, minus what the bot has just failed to find or reach: in a savanna it must not
@@ -127,7 +132,7 @@ export function planGoal(goal, snapshot, data, memory = {}) {
      * @param {number} depth
      */
     function ensureHeld(acceptable, path, depth) {
-        if (acceptable.some(name => (stock[name] ?? 0) > 0 || (STATIONS.includes(name) && nearby.has(name)))) return;
+        if (acceptable.some(name => (stock[name] ?? 0) > 0 || (STATIONS.includes(name) && stationNear(name)))) return;
         const toMake = acceptable.find(worthMaking) ?? acceptable[0];
         const before = unresolved.size;
         obtain(toMake, 1, path, depth);

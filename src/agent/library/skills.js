@@ -37,6 +37,23 @@ async function equipHighestAttack(bot) {
         await bot.equip(weapon, 'hand');
 }
 
+/**
+ * mindcraft fork: empty the player's own 2x2 crafting grid (inventory slots 0-4). A craft that fails half-way
+ * ("missing ingredient") leaves items in it, where inventory.items() does not see them; after that a guard
+ * "crafted" oak planks 43 times without one log being used. Closing the inventory makes the server hand them
+ * back; shift-clicking is the fallback.
+ * @param {MinecraftBot} bot
+ */
+async function clearCraftingGrid(bot) {
+    const stuck = () => [0, 1, 2, 3, 4].filter(slot => bot.inventory.slots[slot]);
+    if (stuck().length === 0) return;
+    try { bot.closeWindow(bot.inventory); } catch { /* not open */ }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    for (const slot of stuck()) {
+        try { await bot.clickWindow(slot, 0, 1); } catch { /* the next craft will say what is wrong */ }
+    }
+}
+
 export async function craftRecipe(bot, itemName, num=1) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
@@ -99,6 +116,7 @@ export async function craftRecipe(bot, itemName, num=1) {
 
     const recipe = recipes[0];
     console.log('crafting...');
+    await clearCraftingGrid(bot);
     //Check that the agent has sufficient items to use the recipe `num` times.
     const inventory = world.getInventoryCounts(bot); //Items in the agents inventory
     const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe); //Items required to use the recipe once.
@@ -110,14 +128,17 @@ export async function craftRecipe(bot, itemName, num=1) {
         // mindcraft fork: a batch craft sometimes throws "missing ingredient" with everything at hand (6 torches
         // from 5 coal and 9 sticks), and the bot went off to explore instead. One at a time, recipe fetched afresh.
         if (!/missing ingredient/i.test(String(err))) throw err;
+        await clearCraftingGrid(bot);
         let made = 0;
         for (let i = 0; i < Math.min(craftLimit.num, num); i++) {
             const again = bot.recipesFor(mc.getItemId(itemName), null, 1, craftingTable)[0];
             if (!again) break;
             try { await bot.craft(again, 1, craftingTable); made++; } catch { break; }
         }
+        await clearCraftingGrid(bot);
         if (made === 0) throw err;
     }
+    await clearCraftingGrid(bot);
     if(craftLimit.num<num) log(bot, `Not enough ${craftLimit.limitingResource} to craft ${num}, crafted ${craftLimit.num}. You now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     else log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     if (placedTable) {

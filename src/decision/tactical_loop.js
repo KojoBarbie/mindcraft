@@ -9,7 +9,7 @@
 import { chooseCommand } from './choose.js';
 import { buildCommand, listActions, listQuantities, maxQuantity } from './catalog.js';
 import { createKnowledge } from './knowledge.js';
-import { describeGoal, isDone } from './goals.js';
+import { describeGoal, goodFood, isDone } from './goals.js';
 import { focusFor, planGoal } from './planner.js';
 import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
@@ -29,6 +29,24 @@ import { createStrategist, isAddressedTo } from './strategist.js';
  * so the model is choosing between "get on with the goal" and "deal with what is in front of me".
  */
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
+
+// best first: what fills most for what it costs
+const MEALS = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'bread', 'cooked_chicken', 'baked_potato', 'cooked_salmon', 'cooked_cod',
+    'cooked_rabbit', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'potato'];
+
+/**
+ * What to eat now to get health back, or null: below 14 health with room in the stomach and something decent
+ * in hand (raw meat will do; rotten flesh and the like will not).
+ * @param {{hp: number, food: number, inventory: Record<string, number>, foodItems?: string[]}} raw
+ * @param {(item: string) => boolean} isFood
+ * @returns {string | null}
+ */
+export function mealToHeal(raw, isFood) {
+    if (!(raw.hp < 14) || !(raw.food < 20)) return null;
+    const good = goodFood(/** @type {any} */ (raw), isFood);
+    const owned = Object.keys(raw.inventory).filter(name => (raw.inventory[name] ?? 0) > 0 && good(name));
+    return MEALS.find(name => owned.includes(name)) ?? owned[0] ?? null;
+}
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
 const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol', '!goToward'];
@@ -214,6 +232,9 @@ export class TacticalLoop {
         });
         /** @type {number | null} the goal the guard's counters are about */
         this.guardGoalId = null;
+        /** the last error a tick threw, and how many ticks in a row threw it */
+        this.lastError = '';
+        this.errorStreak = 0;
 
         this.running = false;
         this.deciding = false;
@@ -392,8 +413,20 @@ export class TacticalLoop {
             this.checkCommandTimeout();
             await this.decide();
             this.persist();
+            this.errorStreak = 0;
         } catch (error) {
-            this.onEvent({ type: 'error', detail: error instanceof Error ? error.message : String(error) });
+            const message = error instanceof Error ? error.message : String(error);
+            this.onEvent({ type: 'error', detail: message });
+            // the same error tick after tick is a goal the loop cannot pursue (a plan the catalog refuses): a guard
+            // repeated one for 25 minutes. Give the goal up so the loop, and the strategist, move on.
+            this.errorStreak = message === this.lastError ? (this.errorStreak ?? 0) + 1 : 1;
+            this.lastError = message;
+            if (this.errorStreak >= 5 && this.guardGoalId != null) {
+                this.goals.giveUp(this.guardGoalId);
+                this.onEvent({ type: 'gave up', detail: { goal: this.currentGoal || String(this.guardGoalId), reason: `the same error five times: ${message.slice(0, 120)}` } });
+                this.guardGoalId = null;
+                this.errorStreak = 0;
+            }
         } finally {
             this.deciding = false;
             this.schedule(this.periodMs);
@@ -418,6 +451,19 @@ export class TacticalLoop {
             this.onEvent({ type: 'paused', detail: { reason: paused.reason, retryAfterMs: paused.retryAfterMs } });
             this.holdUntil(paused.retryAfterMs ?? this.periodMs);
             return;
+        }
+
+        // Hurt and not full: eat. Health only comes back on its own above 18 food, and nothing asked for a meal
+        // at 12-15: a miner went about at 5 health for most of a day with five porkchops, and died of it.
+        if (!this.pendingCommand && this.agent.isIdle()) {
+            const raw = this.rawSnapshot();
+            const meal = mealToHeal(raw, this.data.isFood);
+            if (meal) {
+                this.onEvent({ type: 'heal', detail: { hp: raw.hp, food: raw.food, meal } });
+                this.lastDecisionAt = Date.now();
+                this.run(`!consume("${meal}")`, -1, this.progressSignature(raw), epoch, false);
+                return;
+            }
         }
 
         // A role's routine runs by rule, between goals: the role queues goals itself when it lacks something.
@@ -1033,6 +1079,9 @@ export async function attachTacticalLoop(agent) {
         const [{ createGuardRole }, { takeGuardReport }] = await Promise.all([import('./roles/guard.js'), import('../agent/library/guard.js')]);
         role = createGuardRole({ center: profile.role.center, radius: profile.role.radius, say: text => agent.bot.chat(text), report: () => takeGuardReport(agent.bot),
             onPost: post => { agent.bot.exploreLeash = { x: post.x, z: post.z, radius: 96 }; } });
+        // the guard lights its own area (patrol); the torch-placing reflex spent its torches wherever it walked
+        // for wood and coal, and it never had the 24 it wanted
+        agent.bot.modes?.setOn('torch_placing', false);
     } else if (profile.role?.type === 'lumberjack') {
         const { createLumberjackRole } = await import('./roles/lumberjack.js');
         role = createLumberjackRole({ center: profile.role.center, radius: profile.role.radius, quota: profile.role.quota, chest: profile.role.chest, say: text => agent.bot.chat(text) });

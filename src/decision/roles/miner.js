@@ -89,6 +89,8 @@ export function createMinerRole(options = {}) {
                 return null;
             }
 
+            // gear-gathering can take it far off (it went down 128 blocks from the centre once): walk back first
+            if (onSurface && Math.hypot(snapshot.pos.x - center.x, snapshot.pos.z - center.z) > radius / 2) return `!goToward(${center.x}, ${center.z})`;
             if (snapshot.pos.y > mineY + 2) return `!descendTo(${mineY})`;
             return `!branchMine(${center.x}, ${center.z}, ${radius})`;
         },
