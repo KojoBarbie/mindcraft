@@ -3,7 +3,7 @@
 import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
 import settings from '../../settings.js';
 
-const [name, port] = process.argv.slice(2);
+const [name, port, profileJson] = process.argv.slice(2);
 
 /** @type {Record<string, unknown>} */
 const overrides = {
@@ -17,7 +17,7 @@ const overrides = {
     only_chat_with: [],       // otherwise replies are whispered and never reach bot-output
     narrate_behavior: false,  // otherwise modes interleave lines like "Picking up item!"
     chat_ingame: false,       // results still reach bot-output; this only avoids spamming server chat
-    profile: { name, model: 'none' },
+    profile: { name, model: 'none', ...JSON.parse(profileJson || '{}') },
 };
 Object.assign(settings, overrides);
 

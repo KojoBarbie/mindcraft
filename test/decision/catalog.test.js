@@ -37,9 +37,23 @@ test('with nothing around and nothing in hand, only moving and waiting are possi
     assert.deepEqual(ids(ctx()), ['explore', 'wait']);
 });
 
-test('the catalog never offers more than 20 actions, and ids are unique', () => {
-    assert.ok(ACTIONS.length <= 20);
+test('the catalog stays small enough to put in one question, and ids are unique', () => {
+    // every action is a line of text in the prompt and an option in a choice; keep the list reviewable
+    assert.ok(ACTIONS.length <= 24, `${ACTIONS.length} actions`);
     assert.equal(new Set(ACTIONS.map(a => a.id)).size, ACTIONS.length);
+});
+
+test('searching is offered only for things the bot was told to look for and could actually use', () => {
+    const nothingWanted = ctx();
+    assert.ok(!ids(nothingWanted).includes('search_for_block'));
+
+    const wanted = { ...ctx({ inventory: {} }), wanted: { blocks: ['iron_ore', 'oak_log'], entities: ['cow'] } };
+    assert.deepEqual(listTargets(wanted, 'search_for_block'), ['oak_log']); // no pickaxe: walking to iron_ore is pointless
+    assert.equal(buildCommand(wanted, { id: 'search_for_block', target: 'oak_log' }), '!searchForBlock("oak_log", 64)');
+    assert.equal(buildCommand(wanted, { id: 'search_for_entity', target: 'cow' }), '!searchForEntity("cow", 64)');
+
+    const armed = { ...ctx({}, { canHarvest: () => true }), wanted: { blocks: ['iron_ore'] } };
+    assert.deepEqual(listTargets(armed, 'search_for_block'), ['iron_ore']);
 });
 
 test('blocks that cannot be harvested with what the bot carries are not offered', () => {

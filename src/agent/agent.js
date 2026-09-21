@@ -17,6 +17,7 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+import { attachTacticalLoop } from '../decision/tactical_loop.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -121,6 +122,9 @@ export class Agent {
               
                 this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
+
+                // Decision layer (src/decision): does nothing unless the profile sets "decision_model".
+                this.tactical = await attachTacticalLoop(this);
               
                 if (!load_mem) {
                     if (settings.task) {

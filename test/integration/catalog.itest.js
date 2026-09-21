@@ -33,13 +33,18 @@ before(async () => {
     harness = await startHarness({ name: 'catalog_bot', mindserverPort: 8098 });
     await rcon('time set day');
     for (const name of [PROBE, harness.name]) await rcon(`clear ${name}`);
-    // a stone pad with one log and one stone block on it, so the scene does not depend on the terrain
+    // A long-lived dev world is not a safe place to stand: other tests dig holes and a bot that has been
+    // logged in before comes back hungry. Patch the ground under this one and top it up before measuring.
     const at = `execute at ${PROBE} run`;
-    await rcon(`${at} fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone`);
+    for (const name of [PROBE, harness.name]) {
+        await rcon(`effect give ${name} minecraft:saturation 5 20 true`);
+        await rcon(`effect give ${name} minecraft:instant_health 1 20 true`);
+    }
+    assert.match(await rcon(`${at} fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone`), /Successfully filled/);
     await rcon(`${at} fill ~-3 ~ ~-3 ~3 ~3 ~3 minecraft:air`);
-    await rcon(`${at} setblock ~2 ~ ~0 minecraft:oak_log`);
-    await rcon(`${at} setblock ~-2 ~ ~0 minecraft:stone`);
-    await sleep(1500);
+    assert.match(await rcon(`${at} setblock ~2 ~ ~0 minecraft:oak_log`), /Changed the block/);
+    assert.match(await rcon(`${at} setblock ~-2 ~ ~0 minecraft:stone`), /Changed the block/);
+    await sleep(2000);
 });
 
 after(async () => {

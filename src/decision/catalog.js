@@ -12,6 +12,8 @@ import { ARMOR, HAZARD_BLOCK, STATION, TOOL, namesIn } from './interest.js';
  * @typedef {object} CatalogContext
  * @property {Snapshot} snapshot
  * @property {Knowledge} knowledge
+ * @property {{blocks?: string[], entities?: string[]}} [wanted] things the goal needs that are not in sight, so
+ *   that "go and look for it" can be offered as an action; the planner fills this in
  */
 
 /**
@@ -185,6 +187,18 @@ export const ACTIONS = [
         possible: ({ snapshot }) => owned(snapshot).some(name => name.endsWith('_pickaxe')) && snapshot.pos.y > -50,
         quantities: () => [4, 8, 16],
         build: (_target, n) => `!digDown(${n})`,
+    },
+    {
+        id: 'search_for_block',
+        hint: 'go and look for a block the goal needs but that is not in sight',
+        targets: ({ wanted, knowledge }) => (wanted?.blocks ?? []).filter(name => knowledge.canHarvest(name)),
+        build: target => `!searchForBlock(${q(target)}, 64)`,
+    },
+    {
+        id: 'search_for_entity',
+        hint: 'go and look for a creature the goal needs but that is not in sight',
+        targets: ({ wanted }) => wanted?.entities ?? [],
+        build: target => `!searchForEntity(${q(target)}, 64)`,
     },
     {
         id: 'explore',

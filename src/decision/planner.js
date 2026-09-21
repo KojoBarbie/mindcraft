@@ -132,7 +132,9 @@ export function planGoal(goal, snapshot, data) {
         const blocks = data.sources(item);
         const animal = data.huntedFrom(item);
 
-        if (recipe) {
+        /** @type {(() => void)[]} ways to get the item, best first; the first one that works is kept */
+        const routes = [];
+        if (recipe) routes.push(() => {
             const crafts = Math.ceil(missing / recipe.makes);
             if (recipe.needsTable) ensureHeld(['crafting_table'], next, depth + 1);
             /** @type {Record<string, number>} */
@@ -143,7 +145,8 @@ export function planGoal(goal, snapshot, data) {
             }
             steps.push({ kind: 'craft', item, count: crafts * recipe.makes, crafts, consumes, requires: recipe.needsTable ? [['crafting_table']] : [] });
             stock[item] = held + crafts * recipe.makes - count;
-        } else if (smeltInput) {
+        });
+        if (smeltInput) routes.push(() => {
             ensureHeld(['furnace'], next, depth + 1);
             obtain(smeltInput, missing, next, depth + 1);
             const fuel = FUELS.find(name => (stock[name] ?? 0) > 0) ?? FUELS[0];
@@ -151,18 +154,39 @@ export function planGoal(goal, snapshot, data) {
             obtain(fuel, fuelCount, next, depth + 1);
             steps.push({ kind: 'smelt', item, count: missing, from: smeltInput, consumes: { [smeltInput]: missing, [fuel]: fuelCount }, requires: [['furnace']] });
             stock[item] = 0;
-        } else if (blocks.length > 0) {
+        });
+        // Mining a manufactured item (a beacon, a crafting table) is only sensible when one is actually there;
+        // otherwise the bot would go hunting the world for something nobody has built yet.
+        if (blocks.length > 0 && (!recipe || blocks.some(name => nearby.has(name)))) routes.push(() => {
             // a block that is in sight beats one that is not; otherwise the plain variant (iron_ore, not deepslate_)
             const block = blocks.find(name => nearby.has(name)) ?? blocks.find(name => !name.startsWith('deepslate_')) ?? blocks[0];
             const tools = data.harvestTools(block);
             if (tools) ensureHeld(tools, next, depth + 1);
             steps.push({ kind: 'collect', item, count: missing, block, consumes: {}, requires: tools ? [tools] : [] });
             stock[item] = 0;
-        } else if (animal) {
+        });
+        if (animal) routes.push(() => {
             steps.push({ kind: 'hunt', item, count: missing, from: animal, consumes: {}, requires: [] });
             stock[item] = 0;
-        } else {
+        });
+
+        if (routes.length === 0) {
             unresolved.add(item);
+            return;
+        }
+        // Try the routes in order and keep the first that works out. Without this the planner would commit to
+        // the cheapest-looking recipe even when its ingredients turn out to be unobtainable (leather can be
+        // crafted from rabbit hide, which nothing in the world drops) instead of going hunting.
+        for (const [index, route] of routes.entries()) {
+            const saved = { stock: { ...stock }, steps: steps.length, unresolved: new Set(unresolved) };
+            route();
+            if (unresolved.size === saved.unresolved.size) return;
+            if (index === routes.length - 1) return; // nothing worked: leave the last attempt's gaps on record
+            for (const key of Object.keys(stock)) delete stock[key];
+            Object.assign(stock, saved.stock);
+            steps.length = saved.steps;
+            unresolved.clear();
+            for (const name of saved.unresolved) unresolved.add(name);
         }
     }
 

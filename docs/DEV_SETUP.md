@@ -124,3 +124,27 @@ snapshot on every decision rather than stored; the first step is what to do now,
 into the catalog's action and target. `gamedata.js` adapts minecraft-data for the planner; being pure JS, it lets
 the planner be unit-tested against the real 1.21.6 recipes and drops. `curriculum.js` is the default ladder
 (wood, stone, furnace, food, iron, armor, diamond).
+
+### The tactical loop
+
+`tactical_loop.js` is what ties the layers together, and the only part that touches `src/agent`. It starts
+itself from `agent.js` when a profile sets `decision_model`, and does nothing otherwise:
+
+```json
+{ "name": "andy", "model": "none", "decision_model": "rules", "tactical": { "periodMs": 1500 } }
+```
+
+Each tick it takes a snapshot, asks the `GoalQueue` what the current goal is, plans it, and offers the model
+the planned action plus whatever the situation allows (eat, flee, attack, explore, wait). Picking the planned
+action costs one question: the planner already knows the target and amount. When the planned target is out of
+sight the loop offers `search_for_block` / `search_for_entity` instead — `!moveAway` is just as happy to walk
+into a cave.
+
+Two rules keep it responsive. Commands are fired without being awaited, so the loop keeps ticking while the
+bot digs and can decide to interrupt; and a decision is dropped if the bot's position, health or current
+action changed while the model was thinking. While something is running the only question asked is "should
+this stop?", over a combat-shaped state.
+
+`"decision_model": "rules"` needs no API key at all: `providers/rules.js` answers from a handful of thresholds
+(flee when hurt and cornered, eat when hungry, otherwise follow the plan). It is the baseline a real model has
+to beat, and it is what the integration test uses to get itself a wooden pickaxe.
