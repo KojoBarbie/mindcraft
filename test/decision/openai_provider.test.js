@@ -217,3 +217,11 @@ test('the abort signal reaches fetch', async () => {
     await createOpenAIProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions, signal: controller.signal });
     assert.equal(calls[0].init.signal, controller.signal);
 });
+
+test('option hints reach a chat model in the prompt', async () => {
+    const { fn, calls } = fakeFetch({ body: completion({ action: 'craft' }) });
+    await createOpenAIProvider({ fetch: fn, getKey: () => 'k' }).decide({
+        state: {}, questions: [{ id: 'action', type: 'choice', prompt: 'What next?', options: ['craft', 'wait'], hints: { craft: 'make an item' } }],
+    }).catch(() => {}); // only the request matters here
+    assert.match(calls[0].init.body.messages[1].content, /choose one of: craft = make an item; wait\)/);
+});

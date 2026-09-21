@@ -43,12 +43,13 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
      * @param {string} id
      * @param {string} prompt
      * @param {string[]} choices
+     * @param {Record<string, string>} [hints]
      */
-    async function ask(id, prompt, choices) {
+    async function ask(id, prompt, choices, hints) {
         if (choices.length === 1) return choices[0]; // nothing to decide
         const result = await provider.decide({
             state,
-            questions: [{ id, type: 'choice', prompt, options: choices }],
+            questions: [{ id, type: 'choice', prompt, options: choices, ...(hints && Object.keys(hints).length > 0 ? { hints } : {}) }],
             signal: options.signal,
         });
         decisions++;
@@ -65,8 +66,8 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
     if (options.only) actions = actions.filter(action => options.only?.includes(action.id));
     if (actions.length === 0) throw new Error('No action is possible right now.'); // cannot happen unfiltered: "wait" always is
 
-    const guide = actions.map(action => `${action.id}: ${action.hint}`).join('; ');
-    const action = await ask('action', `Pick the single best next action for the bot, given its goal. Options: ${guide}`, actions.map(a => a.id));
+    const action = await ask('action', 'Pick the single best next action for the bot, given its goal.', actions.map(a => a.id),
+        Object.fromEntries(actions.map(a => [a.id, a.hint])));
 
     const preset = options.preset?.[action];
     if (preset) {
@@ -81,9 +82,8 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
     }
 
     const targets = listTargets(ctx, action);
-    const notes = Object.entries(targetNotes(ctx, action, targets)).map(([name, note]) => `${name} ${note}`).join('; ');
     const target = targets.length > 0
-        ? await ask('target', `The bot will ${action}. Pick what.${notes ? ` Note: ${notes}.` : ''}`, targets)
+        ? await ask('target', `The bot will ${action}. Pick what.`, targets, targetNotes(ctx, action, targets))
         : undefined;
 
     const quantities = listQuantities(ctx, action, target);

@@ -36,6 +36,7 @@ function fakeFetch(reply) {
             ok: status >= 200 && status < 300, status,
             headers: new Headers(reply.headers ?? {}),
             json: () => Promise.resolve(JSON.parse(text)),
+            text: () => Promise.resolve(text),
         });
     });
     return { fn, calls };
@@ -94,7 +95,7 @@ test('an upstream 400 from TypeSafe (a malformed question) is not retried; the p
     );
 });
 
-test('rate limits and server errors are retryable; a non-JSON body is transient', async () => {
+test('rate limits and server errors are retryable, HTML error pages included', async () => {
     for (const status of [429, 500, 503]) {
         const { fn } = fakeFetch({ status, body: { error: { message: `status ${status}` } } });
         await assert.rejects(
@@ -106,7 +107,7 @@ test('rate limits and server errors are retryable; a non-JSON body is transient'
     const html = fakeFetch({ status: 502, body: '<html>Bad Gateway</html>' });
     await assert.rejects(
         createJevProvider({ fetch: html.fn, getKey: () => 'k' }).decide({ state: {}, questions }),
-        error => error instanceof DecisionError && error.retryable && /not JSON/.test(error.message),
+        error => error instanceof DecisionError && error.retryable && error.status === 502,
     );
 });
 
@@ -131,4 +132,82 @@ test('registered as "jev", and it sits in a fallback chain like any provider', a
         { retries: 0 });
     const result = await chain.decide({ state: { plan_action: 'craft' }, questions: [questions[0]] });
     assert.equal(result.provider, 'rules');
+});
+
+test('an HTML error page is still judged by its status: a 401 is not retried, a 429 is', async () => {
+    const auth = fakeFetch({ status: 401, body: '<html>Unauthorized</html>' });
+    await assert.rejects(
+        createJevProvider({ fetch: auth.fn, getKey: () => 'k' }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && !error.retryable && error.status === 401,
+    );
+    const busy = fakeFetch({ status: 429, body: '<html>slow down</html>', headers: { 'retry-after': new Date(Date.now() + 30_000).toUTCString() } });
+    await assert.rejects(
+        createJevProvider({ fetch: busy.fn, getKey: () => 'k' }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && error.retryable && error.status === 429 && (error.retryAfterMs ?? 0) > 20_000,
+    );
+});
+
+test('hints become the criteria Jev reads; options without one keep their name', () => {
+    const q = /** @type {any} */ (toJevQuestion({ id: 'a', type: 'choice', prompt: 'p', options: ['craft', 'wait'], hints: { craft: 'make an item' } }));
+    assert.deepEqual(q.criteria, { craft: 'make an item', wait: 'wait' });
+});
+
+test('float noise in the probabilities is cleaned up, not a reason to throw the answer away', async () => {
+    const noisy = { ...realAnswer.answers.action, probabilities: { craft: 1.0000001, explore: 0.02, wait: 0 }, confidence: 1.0000002 };
+    const { fn } = fakeFetch({ body: { answers: { ...realAnswer.answers, action: noisy } } });
+    const result = await createJevProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions });
+    validateAnswers(questions, result.answers);
+    assert.equal(result.answers.action.confidence, 1);
+    const d = /** @type {Record<string, number>} */ (/** @type {any} */ (result.answers.action).distribution);
+    assert.ok(Math.abs(Object.values(d).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+
+    const missing = { ...realAnswer.answers.action, probabilities: { explore: 1 } }; // says craft, gives no mass to it
+    const other = fakeFetch({ body: { answers: { ...realAnswer.answers, action: missing } } });
+    const kept = await createJevProvider({ fetch: other.fn, getKey: () => 'k' }).decide({ state: {}, questions });
+    assert.equal(kept.answers.action.value, 'craft');
+    assert.equal(/** @type {any} */ (kept.answers.action).distribution, undefined);
+
+    const offList = fakeFetch({ body: { answers: { ...realAnswer.answers, action: { ...realAnswer.answers.action, choice: 'dance' } } } });
+    await assert.rejects(createJevProvider({ fetch: offList.fn, getKey: () => 'k' }).decide({ state: {}, questions }), /not offered/);
+});
+
+test('a score is the expected value over the anchors, whatever the range', async () => {
+    const q = /** @type {import('../../src/decision/types.js').Question} */ ({ id: 'risk', type: 'score', prompt: 'p', min: 5, max: 15 });
+    const { fn } = fakeFetch({ body: { answers: { risk: { score: 0.25, probabilities: { 0: 0.75, 1: 0.25 }, confidence: 0.5 } } } });
+    const result = await createJevProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions: [q] });
+    assert.ok(Math.abs(/** @type {number} */ (result.answers.risk.value) - 7.5) < 1e-9);
+    const bare = fakeFetch({ body: { answers: { risk: { score: 0.5 } } } });
+    const fallback = await createJevProvider({ fetch: bare.fn, getKey: () => 'k' }).decide({ state: {}, questions: [q] });
+    assert.equal(fallback.answers.risk.value, 10);
+});
+
+test('keys: AI_GATEWAY_API_KEY first, VERCEL_API_KEY after; never sent to another host unless named', async () => {
+    const { fn, calls } = fakeFetch({ body: realAnswer });
+    /** @type {string[]} */
+    const asked = [];
+    await createJevProvider({ fetch: fn, getKey: name => { asked.push(name); if (name === 'VERCEL_API_KEY') return 'v'; throw new Error('none'); } })
+        .decide({ state: {}, questions });
+    assert.deepEqual(asked, ['AI_GATEWAY_API_KEY', 'VERCEL_API_KEY']);
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer v');
+
+    const elsewhere = fakeFetch({ body: realAnswer });
+    await assert.rejects(
+        createJevProvider({ fetch: elsewhere.fn, baseURL: 'https://proxy.example/v1', getKey: () => 'secret' }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && error.status === 401,
+    );
+    assert.equal(elsewhere.calls.length, 0);
+    await createJevProvider({ fetch: elsewhere.fn, baseURL: 'https://proxy.example/v1', apiKeyName: 'PROXY_KEY', getKey: () => 'p' })
+        .decide({ state: {}, questions });
+    assert.equal(elsewhere.calls[0].url, 'https://proxy.example/v1/evaluate');
+
+    const none = fakeFetch({ body: realAnswer });
+    await assert.rejects(
+        createJevProvider({ fetch: none.fn, getKey: () => { throw new Error('no key'); } }).decide({ state: {}, questions }),
+        error => error instanceof DecisionError && !error.retryable && /No API key/.test(error.message),
+    );
+});
+
+test('a 200 without answers is an error', async () => {
+    const { fn } = fakeFetch({ body: { usage: {} } });
+    await assert.rejects(createJevProvider({ fetch: fn, getKey: () => 'k' }).decide({ state: {}, questions }), /did not answer/);
 });
