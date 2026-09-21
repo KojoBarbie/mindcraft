@@ -69,12 +69,13 @@ async function replant(bot) {
 export async function chopTree(bot, center = null, radius = 32) {
     await replant(bot);
     const origin = center ?? bot.entity.position;
-    const bases = world.getNearestBlocksWhere(bot, block => {
-        if (!block?.position || !isLog(block) || isUnreachable(bot, block.position)) return false;
+    const logNames = Object.keys(SAPLING_OF);
+    const bases = world.getNearestBlocksNamed(bot, logNames, block => {
+        if (isUnreachable(bot, block.position)) return false;
         if (Math.hypot(block.position.x - origin.x, block.position.z - origin.z) > radius) return false;
         const below = bot.blockAt(block.position.offset(0, -1, 0));
         return !!below && GROUND.includes(below.name);
-    }, radius + 16, 8).filter(Boolean);
+    }, radius + 16, 8);
     if (bases.length === 0) {
         log(bot, `No trees left within ${radius} blocks of ${Math.round(origin.x)}, ${Math.round(origin.z)}.`);
         return false;

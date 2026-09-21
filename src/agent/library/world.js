@@ -175,6 +175,23 @@ export function hasStandingSpot(bot, pos) {
     return false;
 }
 
+export function getNearestBlocksNamed(bot, names, where = () => true, distance = 64, count = 1) {
+    /**
+     * mindcraft fork: the nearest blocks with one of these names that also satisfy `where`. findBlocks first asks
+     * its predicate about blocks with no position (to skip whole chunk sections by their palette), so a predicate
+     * that looks at positions rules everything out; this one matches by name there and checks `where` after.
+     * @returns {Block[]}
+     **/
+    const positions = bot.findBlocks({ matching: block => !!block && names.includes(block.name), maxDistance: distance, count: 256 });
+    const found = [];
+    for (const position of positions) {
+        const block = bot.blockAt(position);
+        if (block && where(block)) found.push(block);
+        if (found.length >= count) break;
+    }
+    return found;
+}
+
 export function getNearestReachableBlocks(bot, predicate, distance = 64, count = 1) {
     /**
      * The nearest blocks that satisfy the predicate, those with somewhere to stand next to them first.

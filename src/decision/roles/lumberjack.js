@@ -26,6 +26,9 @@ export function createLumberjackRole(options = {}) {
     /** @type {number | null} logs held when a delivery was started */
     let depositing = null;
     let reported = false;
+    let radiusNow = radius;
+    let lastHeld = -1;
+    let barren = 0; // felling attempts in a row that brought no logs
     /** @type {[number, number, number] | null} */
     let chest = Array.isArray(options.chest) ? options.chest : null;
 
@@ -64,13 +67,25 @@ export function createLumberjackRole(options = {}) {
                 if (!pending) loop.goals.add(haveTool('wooden', 'axe'), { priority: 1000 });
                 return null;
             }
+            // no trees within reach: look further afield, a little at a time, and tell the player once
+            if (lastHeld >= 0 && held <= lastHeld) barren++;
+            else barren = 0;
+            lastHeld = held;
+            if (barren >= 2) {
+                barren = 0;
+                if (radiusNow < 128) {
+                    radiusNow += 24;
+                    options.say?.(`近くに木がありません。範囲を ${radiusNow} ブロックに広げて探します。`);
+                }
+                return '!explore(32)';
+            }
             const batch = Math.min(32, quota - delivered);
             if (chest && held >= batch) {
                 depositing = held;
                 const [x, y, z] = chest;
                 return `!depositLogs(${x}, ${y}, ${z})`;
             }
-            return `!chopTree(${center.x}, ${center.z}, ${radius})`;
+            return `!chopTree(${center.x}, ${center.z}, ${radiusNow})`;
         },
     };
 }
