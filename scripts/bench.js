@@ -206,7 +206,25 @@ async function runTrial(scenario, config, trial) {
     return row;
 }
 
+/**
+ * One benchmark at a time on the lab server: two would restore the world under each other's bots (it happened,
+ * and every trial of both runs was worthless). The lock holds the owner's pid; a lock whose owner is gone is
+ * taken over.
+ */
+function takeLock() {
+    const lock = join(LAB_ROOT, 'server_data_lab.bench.lock');
+    if (existsSync(lock)) {
+        const pid = Number(readFileSync(lock, 'utf8'));
+        let alive = false;
+        try { process.kill(pid, 0); alive = true; } catch { /* gone */ }
+        if (alive && pid !== process.pid) throw new Error(`another benchmark (pid ${pid}) is using the lab server; stop it first`);
+    }
+    writeFileSync(lock, String(process.pid));
+    process.once('exit', () => { try { if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock); } catch { /* already gone */ } });
+}
+
 async function main() {
+    takeLock();
     if (args.includes('--make-pristine')) return makePristine();
     const { scenarios: all } = JSON.parse(readFileSync(join(ROOT, 'bench/scenarios.json'), 'utf8'));
     const pick = opt('scenarios', '');
