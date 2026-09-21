@@ -1104,6 +1104,10 @@ export async function goToGoal(bot, goal) {
     nonDestructiveMovements.digCost = 10;
 
     const destructiveMovements = new pf.Movements(bot);
+    // mindcraft fork: a path through blocks the bot cannot mine with what it holds (stone with bare hands) ends
+    // in "Pathfinding stopped: Cannot break stone with current tools", every time. Route around them instead.
+    for (const movements of [nonDestructiveMovements, destructiveMovements])
+        for (const id of unbreakableNow(bot)) movements.blocksCantBreak.add(id);
 
     let final_movements = destructiveMovements;
 
@@ -1142,6 +1146,21 @@ export async function goToGoal(bot, goal) {
         // we need to catch so we can clean up the door check interval, then rethrow the error
         throw err;
     }
+}
+
+// mindcraft fork: ids of blocks that need a tool the bot does not have (cached per inventory).
+let unbreakableCache = { key: '', ids: [] };
+export function unbreakableNow(bot) {
+    const held = bot.inventory.items().map(item => item.type);
+    const key = [...new Set(held)].sort().join(',');
+    if (unbreakableCache.key === key) return unbreakableCache.ids;
+    const ids = [];
+    for (const block of Object.values(bot.registry.blocks)) {
+        const tools = block.harvestTools ? Object.keys(block.harvestTools).map(Number) : null;
+        if (tools && !tools.some(id => held.includes(id))) ids.push(block.id);
+    }
+    unbreakableCache = { key, ids };
+    return ids;
 }
 
 // mindcraft fork: how far the bot may drop and keep at least 6 health. Fall damage is one point per block
