@@ -161,6 +161,9 @@ test('a selection the catalog would not have offered can never become a command'
     const logs = ctx({ blocks: [{ name: 'oak_log', dist: 3, dy: 0 }] });
     assert.throws(() => buildCommand(logs, { id: 'collect_blocks', target: 'diamond_ore', quantity: 1 }), /not a valid target/);
     assert.throws(() => buildCommand(logs, { id: 'collect_blocks', target: 'oak_log', quantity: 999 }), /not a valid quantity/);
+    assert.throws(() => buildCommand(logs, { id: 'collect_blocks', target: 'oak_log', quantity: 2.5 }), /not a valid quantity/);
+    // a planner may ask for an exact amount between the offered steps, up to the largest one
+    assert.equal(buildCommand(logs, { id: 'collect_blocks', target: 'oak_log', quantity: 11 }), '!collectBlocks("oak_log", 11)');
     assert.throws(() => buildCommand(logs, { id: 'collect_blocks", 1); !newAction("x' }), /Unknown action/);
 });
 

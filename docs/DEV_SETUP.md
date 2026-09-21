@@ -111,3 +111,16 @@ confidence. `buildCommand()` refuses any selection the catalog would not have of
 The dev server runs with Paper's connection throttle disabled (`dev/server-patches/bukkit.json`). With the
 default 4 s throttle, the second of two bots connecting back to back is kicked, which looks like "the agent
 never joined".
+
+### Goals and the planner
+
+`goals.js` defines typed goals (`have_item`, `have_tool` = that tier or better, `have_food`), each with an
+`isDone(snapshot)`, and a `GoalQueue` (priority, parent/child, give up after repeated failure, JSON round trip).
+`planner.js` works backwards from a goal to ordered `collect` / `craft` / `smelt` / `hunt` steps with no model:
+it counts what the bot holds and what crafting leaves over, prefers materials that are in the inventory or in
+sight (a savanna spawn has acacia, not oak), asks for the cheapest tool that can harvest a block, and lists
+anything it cannot resolve. Plans are cheap (well under a millisecond), so they are recomputed from the current
+snapshot on every decision rather than stored; the first step is what to do now, and `focusFor(step)` turns it
+into the catalog's action and target. `gamedata.js` adapts minecraft-data for the planner; being pure JS, it lets
+the planner be unit-tested against the real 1.21.6 recipes and drops. `curriculum.js` is the default ladder
+(wood, stone, furnace, food, iron, armor, diamond).
