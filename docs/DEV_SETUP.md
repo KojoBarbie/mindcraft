@@ -226,6 +226,28 @@ since the agent started.
 One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
 check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
 
+### Strategist (`strategist.js`)
+
+A large chat model, asked rarely and never waited for, that turns a player's request or a stalled run into typed
+goals. Set `strategy_model` to any model Mindcraft knows (`src/models/`):
+
+```json
+"strategy_model": "gpt-5-mini",
+"strategy": { "maxPerHour": 20, "cooldownMs": { "low_confidence": 120000, "gave_up": 60000 } }
+```
+
+It is consulted when a player talks to the bot (a message naming it, or any message when they are alone
+together; `!commands` never), when a decision's confidence is below `tactical.lowConfidence`, and when a goal is
+given up. One consultation at a time; per-kind cooldowns and an hourly cap; the guard's budget applies. The
+answer (`{"reply", "goals"}`) is checked: known goal types, real item ids, and a route the planner can find from
+where the bot stands. A player's goals go ahead of the queue in the order given, the strategist's own after the
+current goal; duplicates are skipped; the reply goes to chat. Every consultation is a `kind: "strategy"` line in
+the telemetry (cost estimated from token counts, so reasoning tokens are missing).
+
+Measured with gpt-5-mini (2026-09-21): 「鉄装備を揃えて」 became an iron pickaxe and the four iron armour pieces,
+「家を建てて」 a stone axe, 64 planks, 32 cobblestone, 8 glass and a door; 10-13 s and ~$0.0004 each. Building
+itself is not a goal type yet, so a house stops at its materials.
+
 ### Chat models as decision providers (`providers/openai.js`)
 
 Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions
