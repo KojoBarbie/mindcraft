@@ -10,19 +10,19 @@
 // restrict publishing benchmark results for Jev.
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mcdata from 'minecraft-data';
 import { io } from 'socket.io-client';
 import { startHarness } from './lib/harness.js';
 import { rcon } from './lib/rcon.js';
-import { CONFIGS, formatTable, summarizeTrial } from './lib/bench.js';
+import { CONFIGS, formatTable, scenarioMet, summarizeTrial } from './lib/bench.js';
 import { createGameData } from '../src/decision/gamedata.js';
-import { isDone } from '../src/decision/goals.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 // The lab server's compose file and data may live in another checkout (a git worktree runs the same server).
-const LAB_ROOT = process.env.MC_LAB_ROOT ?? ROOT;
+const LAB_ROOT = process.env.MC_LAB_ROOT || ROOT;
+if (!isAbsolute(LAB_ROOT)) throw new Error(`MC_LAB_ROOT must be an absolute path, not "${LAB_ROOT}"`);
 const SERVICE = 'minecraft-lab';
 const DATA = join(LAB_ROOT, 'server_data_lab');
 const PRISTINE = join(LAB_ROOT, 'server_data_lab_pristine');
@@ -58,9 +58,18 @@ async function waitForServer() {
 }
 
 /** Put the lab world back as it was when the pristine copy was made. */
+/** The world files are only touched once the server is known to be down: deleting a live world corrupts it. */
+function stopServer() {
+    compose('stop', SERVICE);
+    const running = execFileSync('docker', ['compose', '-f', join(LAB_ROOT, 'docker-compose.dev.yml'), '--profile', 'lab', 'ps', '-q', '--status', 'running', SERVICE],
+        { encoding: 'utf8', env: process.env }).trim();
+    if (running) throw new Error(`the lab server is still running after stop (compose project ${process.env.COMPOSE_PROJECT_NAME}); not touching its world`);
+    if (!existsSync(join(DATA, 'world'))) throw new Error(`no world at ${DATA}: is MC_LAB_ROOT the checkout the lab server runs from?`);
+}
+
 async function restoreWorld() {
     if (!existsSync(PRISTINE)) throw new Error(`no pristine world at ${PRISTINE}: run with --make-pristine first`);
-    compose('stop', SERVICE);
+    stopServer();
     for (const w of WORLDS) {
         rmSync(join(DATA, w), { recursive: true, force: true });
         cpSync(join(PRISTINE, w), join(DATA, w), { recursive: true });
@@ -70,12 +79,12 @@ async function restoreWorld() {
 }
 
 async function makePristine() {
-    compose('stop', SERVICE);
+    stopServer();
     for (const w of WORLDS) rmSync(join(DATA, w), { recursive: true, force: true });
     compose('up', '-d', SERVICE);
     await waitForServer();
     await rcon('save-all flush');
-    compose('stop', SERVICE);
+    stopServer();
     rmSync(PRISTINE, { recursive: true, force: true });
     for (const w of WORLDS) cpSync(join(DATA, w), join(PRISTINE, w), { recursive: true });
     compose('up', '-d', SERVICE);
@@ -88,6 +97,23 @@ const readJsonl = path => (existsSync(path) ? readFileSync(path, 'utf8').split('
     try { return [JSON.parse(line)]; } catch { return []; }
 }) : []);
 
+/** Whatever a trial left running, so an interrupted benchmark does not leave a bot or MindServer behind. */
+/** @type {Set<() => Promise<void>>} */
+const cleanups = new Set();
+process.once('SIGINT', async () => {
+    for (const cleanup of cleanups) await cleanup().catch(() => {});
+    process.exit(130);
+});
+
+let trialCounter = 0;
+
+/** The server's own clock. @returns {Promise<number | null>} */
+async function serverTimeOfDay() {
+    const reply = await rcon('time query daytime').catch(() => '');
+    const t = Number(/(\d+)/.exec(reply)?.[1]);
+    return Number.isFinite(t) ? t : null;
+}
+
 /**
  * @param {any} scenario
  * @param {import('./lib/bench.js').Config} config
@@ -95,58 +121,88 @@ const readJsonl = path => (existsSync(path) ? readFileSync(path, 'utf8').split('
  */
 async function runTrial(scenario, config, trial) {
     if (!args.includes('--no-restore')) await restoreWorld();
-    const name = `bench_${config.id}`;
+    // a new name every trial: a reused one would start with the last trial's inventory when the world is not restored
+    const name = `b${config.id}_${++trialCounter}`;
     const botDir = join(ROOT, 'bots', name);
     rmSync(botDir, { recursive: true, force: true });
     mkdirSync(botDir, { recursive: true });
     process.env.MINDCRAFT_USAGE_LOG = join(botDir, 'llm_usage.jsonl');
+    const telemetryPath = join(botDir, 'decisions.jsonl');
+    const usagePath = join(botDir, 'llm_usage.jsonl');
 
     await rcon('difficulty easy');
     await rcon('weather clear');
     await rcon('gamerule doDaylightCycle true');
     await rcon(`time set ${scenario.time ?? 1000}`);
     await rcon('scoreboard objectives add deaths deathCount').catch(() => '');
-    await rcon(`scoreboard players reset ${name} deaths`).catch(() => '');
 
-    const port = 8110 + CONFIGS.indexOf(config);
-    const harness = await startHarness({ name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000, profile: config.profile(scenario) });
-    /** @type {any} */
-    let latest = null;
-    const feed = io(`http://localhost:${port}`);
-    feed.on('connect', () => feed.emit('listen-to-agents'));
-    feed.on('state-update', (/** @type {Record<string, any>} */ states) => { if (states?.[name] && !states[name].error) latest = states[name]; });
-
+    // The clock starts before the bot joins, the same for every configuration: (b) and (d) start acting as soon
+    // as they spawn, (a) and (c) once the sentence arrives a moment later.
     const startedAt = Date.now();
-    if (config.task === 'self_prompt') await harness.send(`!goal("${scenario.text}")`, { timeoutMs: 30_000 }).catch(() => '');
-    if (config.task === 'chat') harness.post(scenario.text);
-
+    const port = 8110 + CONFIGS.indexOf(config);
     /** @type {number | null} */
     let succeededAt = null;
-    const deadline = startedAt + scenario.minutes * 60_000;
-    while (Date.now() < deadline) {
-        await sleep(5_000);
-        const inventory = latest?.inventory?.counts ?? {};
-        const met = isDone(scenario.goal, /** @type {any} */ ({ inventory, foodItems: Object.keys(inventory).filter(data.isFood) }), data.isFood);
-        if (scenario.survive) {
-            const tod = Number(latest?.gameplay?.timeOfDay ?? 0);
-            if (tod >= 23_300 || (tod < 12_000 && Date.now() - startedAt > 60_000)) { succeededAt = Date.now(); break; }
-        } else if (met) {
-            succeededAt = Date.now();
-            break;
+    /** @type {string | undefined} */
+    let error;
+    /** @type {Awaited<ReturnType<typeof startHarness>> | null} */
+    let harness = null;
+    /** @type {ReturnType<typeof io> | null} */
+    let feed = null;
+    const cleanup = async () => {
+        feed?.close();
+        await harness?.stop();
+    };
+    cleanups.add(cleanup);
+    try {
+        harness = await startHarness({ name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000, profile: config.profile(scenario) });
+        await rcon(`clear ${name}`);
+        feed = io(`http://localhost:${port}`);
+        feed.on('connect', () => feed?.emit('listen-to-agents'));
+        // judged on every state update (once a second), not on a slower poll
+        feed.on('state-update', (/** @type {Record<string, any>} */ states) => {
+            const state = states?.[name];
+            if (succeededAt === null && state && !state.error && !scenario.survive
+                && scenarioMet(scenario, { inventory: state.inventory?.counts ?? null, serverTimeOfDay: null }, data.isFood))
+                succeededAt = Date.now();
+        });
+
+        // The sentence is posted, not sent: neither !goal nor the strategist answers the harness. Whether it was
+        // taken up shows in the logs: the chat model's first call, or the strategist's consultation.
+        if (config.task === 'self_prompt') harness.post(`!goal("${scenario.text}")`);
+        if (config.task === 'chat') harness.post(scenario.text);
+        if (config.task !== 'goal') {
+            const taken = Date.now() + 90_000;
+            const takenUp = () => (config.task === 'self_prompt'
+                ? readJsonl(usagePath).length > 0
+                : readJsonl(telemetryPath).some(r => r.kind === 'strategy'));
+            while (!takenUp()) {
+                if (Date.now() > taken) throw new Error('the task was not taken up within 90 s');
+                await sleep(1_000);
+            }
         }
+
+        const deadline = startedAt + scenario.minutes * 60_000;
+        while (succeededAt === null && Date.now() < deadline) {
+            await sleep(2_000);
+            if (scenario.survive && scenarioMet(scenario, { inventory: null, serverTimeOfDay: await serverTimeOfDay() }, data.isFood))
+                succeededAt = Date.now();
+        }
+    } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+    } finally {
+        await cleanup().catch(() => {});
+        cleanups.delete(cleanup);
     }
     const endedAt = Date.now();
     const deathsText = await rcon(`scoreboard players get ${name} deaths`).catch(() => '');
     const deaths = Number(/has (\d+)/.exec(deathsText)?.[1] ?? 0);
-    feed.close();
-    await harness.stop();
 
     const row = summarizeTrial({
-        scenario, config, startedAt, endedAt, succeededAt, deaths,
-        telemetry: readJsonl(join(botDir, 'decisions.jsonl')),
-        usage: readJsonl(join(botDir, 'llm_usage.jsonl')),
+        scenario, config, startedAt, endedAt, succeededAt, deaths, error,
+        telemetry: readJsonl(telemetryPath),
+        usage: readJsonl(usagePath),
     });
-    console.log(`[bench] ${JSON.stringify({ trial, ...row })}`);
+    console.log(`[bench] ${JSON.stringify({ trial, ...row, latencies: undefined })}`);
     return row;
 }
 
@@ -163,11 +219,8 @@ async function main() {
     for (let trial = 1; trial <= trials; trial++)
         for (const scenario of scenarios)
             for (const config of configs) {
-                try {
-                    rows.push(await runTrial(scenario, config, trial));
-                } catch (error) {
-                    console.error(`[bench] ${scenario.id}/${config.id} trial ${trial} failed to run:`, error);
-                }
+                // runTrial reports its own failures as failed trials; only a broken world restore throws here
+                rows.push(await runTrial(scenario, config, trial));
             }
 
     const stamp = started.toISOString().slice(0, 16).replace(/[:T]/g, '-');
@@ -183,8 +236,10 @@ async function main() {
         '',
         formatTable(rows),
         '',
-        'Time is to success (successful trials only). Decisions: model calls that chose an action (for a, every',
-        'chat model call). $ includes the decision layer, the strategist and the chat model, at list prices.',
+        'Time: median seconds to success over successful trials, from before the bot joins. Decisions: model calls',
+        'that chose an action; for (a) every chat model call, code generation and memory included. Latency',
+        'percentiles over all calls. $: decision layer, strategist and chat model at list prices (cached input at 10%).',
+        '(b) and (d) are given a typed goal, (a) and (c) the same sentence: compare (a) with (c).',
         '',
     ].join('\n'));
     console.log(`[bench] report: docs/reports/bench-${stamp}.md`);

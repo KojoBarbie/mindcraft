@@ -12,7 +12,9 @@ function logUsage(model, usage, startedAt) {
         appendFileSync(path, JSON.stringify({
             t: Date.now(), model,
             inputTokens: usage.input_tokens ?? usage.prompt_tokens ?? null,
+            cachedTokens: (usage.input_tokens_details ?? usage.prompt_tokens_details)?.cached_tokens ?? 0, // billed at a discount
             outputTokens: usage.output_tokens ?? usage.completion_tokens ?? null, // reasoning included
+            reasoningTokens: (usage.output_tokens_details ?? usage.completion_tokens_details)?.reasoning_tokens ?? 0,
             latencyMs: Date.now() - startedAt,
         }) + '\n');
     } catch { /* a log that cannot be written must not break the bot */ }
