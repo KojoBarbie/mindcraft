@@ -1,3 +1,4 @@
+import { isEnclosedAt } from '../../decision/daylight.js';
 import pf from 'mineflayer-pathfinder';
 import * as mc from '../../utils/mcdata.js';
 
@@ -428,4 +429,16 @@ export function getBiomeName(bot) {
      **/
     const biomeId = bot.world.getBiome(bot.entity.position);
     return mc.getAllBiomes()[biomeId].name;
+}
+
+// mindcraft fork: see src/decision/daylight.js
+export { ENCLOSURE_OFFSETS } from '../../decision/daylight.js';
+
+export function isEnclosed(bot) {
+    /**
+     * Is the bot boxed in: solid blocks on all four sides at feet and head height, and above its head?
+     * @param {MinecraftBot} bot
+     * @returns {boolean}
+     **/
+    return isEnclosedAt(pos => bot.blockAt(pos), bot.entity.position.floored());
 }

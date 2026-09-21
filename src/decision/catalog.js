@@ -3,6 +3,7 @@
 // targets make sense, so impossible moves never appear as options: a model cannot choose to mine iron
 // without a pickaxe if "iron_ore" is simply not on the list. Every action maps onto one of Mindcraft's
 // existing !commands (src/agent/commands/actions.js), which stays untouched.
+import { isNight } from './daylight.js';
 import { ARMOR, HAZARD_BLOCK, STATION, TOOL, namesIn } from './interest.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
@@ -172,7 +173,7 @@ export const ACTIONS = [
     {
         id: 'sleep',
         hint: 'sleep in a nearby bed to skip the night',
-        possible: ({ snapshot }) => snapshot.timeOfDay >= 12500 && snapshot.timeOfDay < 23500 && snapshot.blocks.some(b => b.name.endsWith('_bed')),
+        possible: ({ snapshot }) => isNight(snapshot.timeOfDay) && snapshot.blocks.some(b => b.name.endsWith('_bed')),
         build: () => '!goToBed()',
     },
     {
