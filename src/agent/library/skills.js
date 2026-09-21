@@ -454,7 +454,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     const unsafeBlocks = ['obsidian'];
 
     for (let i=0; i<num; i++) {
-        let blocks = world.getNearestBlocksWhere(bot, block => {
+        let blocks = world.getNearestReachableBlocks(bot, block => {
             if (!blocktypes.includes(block.name)) {
                 return false;
             }
@@ -1270,7 +1270,7 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
         block = blocks[0];
     }
     else {
-        block = world.getNearestBlocksWhere(bot, b => b.name === blockType && !isUnreachable(bot, b.position), range, 1)[0] ?? null;
+        block = world.getNearestReachableBlocks(bot, b => b.name === blockType && !isUnreachable(bot, b.position), range, 1)[0] ?? null;
     }
     if (!block) {
         log(bot, `Could not find any ${blockType} in ${range} blocks${pruneUnreachable(bot) ? ' that it has not already failed to reach' : ''}.`);

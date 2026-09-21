@@ -37,6 +37,7 @@ if (!request) {
 const minutes = Number(opt('minutes', '8'));
 const fps = Number(opt('fps', '2'));
 const name = opt('name', 'demo_bot');
+const port = Number(opt('port', '8120')); // the MindServer's; give each demo running at once its own
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 /** @param {string} path */
 const readJsonl = path => (existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).flatMap(line => {
@@ -58,17 +59,17 @@ async function main() {
     await rcon(`time set ${opt('time', '1000')}`);
 
     const harness = await startHarness({
-        name, mindserverPort: 8120, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000,
+        name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000,
         profile: { decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini' },
     });
     await rcon(`clear ${name}`);
     /** @type {any} */
     let latest = null;
-    const feed = io('http://localhost:8120');
+    const feed = io(`http://localhost:${port}`);
     feed.on('connect', () => feed.emit('listen-to-agents'));
     feed.on('state-update', (/** @type {Record<string, any>} */ states) => { if (states?.[name] && !states[name].error) latest = states[name]; });
 
-    const rig = await createCameraRig({ target: name, name: 'demo_cam' });
+    const rig = await createCameraRig({ target: name, name: `${name.slice(0, 11)}_cam` });
     /** @type {{i: number, t: number, health: number | null, food: number | null, goal: string | null, inventory: Record<string, number>, timeOfDay: number | null}[]} */
     const frames = [];
     const startedAt = Date.now();

@@ -806,3 +806,14 @@ test('a search that finds nothing makes the loop plan without that block for a w
     loop.absentBlocks.set('sand', { until: Date.now() + 60_000, x: 500, z: 500 });
     assert.ok(![...loop.planMemory().absent].includes('sand'), 'recorded far from here: forgotten');
 });
+
+test('progress: walking about counts only for commands meant to move; gains always count', () => {
+    const agent = fakeAgent({ inventory: { oak_log: 1 } });
+    const { loop } = loopFor(agent);
+    const before = loop.progressSignature(loop.rawSnapshot());
+    agent.bot.entity.position = vec(20.5, 64, 0.5); // walked 20 blocks
+    assert.equal(loop.madeProgress(before, '!collectBlocks("oak_log", 3)'), false, 'a failed collect that wandered is not progress');
+    assert.equal(loop.madeProgress(before, '!moveAway(32)'), true);
+    agent.bot.inventory.items = () => [{ name: 'oak_log', count: 3 }];
+    assert.equal(loop.madeProgress(before, '!collectBlocks("oak_log", 3)'), true);
+});

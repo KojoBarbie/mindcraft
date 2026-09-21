@@ -158,6 +158,34 @@ export function getNearestBlocksWhere(bot, predicate, distance=8, count=10000) {
     return blocks;
 }
 
+// mindcraft fork: is there somewhere to stand within reach of this block? A log high up a tree has none for a
+// bot without blocks to build up with, and the pathfinder answers "no path" for it. The nearest log is often
+// one of those (acacia trunks lean), so a soak run tried them again and again.
+const STAND_OFFSETS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+export function hasStandingSpot(bot, pos) {
+    if (!pos) return false;
+    const passable = b => !!b && b.boundingBox === 'empty' && b.name !== 'lava' && b.name !== 'water';
+    for (const [dx, dz] of STAND_OFFSETS)
+        for (const dy of [0, -1, -2]) { // standing lower still reaches a block up to two above its feet
+            const feet = pos.offset(dx, dy, dz);
+            const ground = bot.blockAt(feet.offset(0, -1, 0));
+            if (passable(bot.blockAt(feet)) && passable(bot.blockAt(feet.offset(0, 1, 0))) && ground && ground.boundingBox === 'block')
+                return true;
+        }
+    return false;
+}
+
+export function getNearestReachableBlocks(bot, predicate, distance = 64, count = 1) {
+    /**
+     * The nearest blocks that satisfy the predicate, those with somewhere to stand next to them first.
+     * @returns {Block[]}
+     **/
+    const candidates = getNearestBlocksWhere(bot, predicate, distance, 64).filter(Boolean);
+    const standable = candidates.filter(block => hasStandingSpot(bot, block.position));
+    const rest = candidates.filter(block => !standable.includes(block));
+    return [...standable, ...rest].slice(0, count);
+}
+
 
 export function getNearestBlock(bot, block_type, distance=16) {
      /**

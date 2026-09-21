@@ -324,11 +324,21 @@ export class TacticalLoop {
      * more of some item, a restored bar, or having actually travelled.
      * @param {ProgressSignature} before
      */
-    madeProgress(before) {
+    /**
+     * Did the command get anywhere? Gains in the inventory always count. Walking counts only for commands whose
+     * job is to move (exploring, going to something): a collect that wandered about and failed ("Failed to
+     * collect oak_log: NoPath") moved the bot too, and counting that as progress hid 30 failures in a demo run.
+     * Health and food count only for eating; they recover by themselves.
+     * @param {ProgressSignature} before
+     * @param {string} [command]
+     */
+    madeProgress(before, command = '') {
         const now = this.rawSnapshot();
         if (Object.entries(now.inventory).some(([name, count]) => count > (before.inventory[name] ?? 0))) return true;
-        if (now.food > before.food || now.hp > before.hp) return true;
-        return Math.hypot(now.pos.x - before.pos.x, now.pos.z - before.pos.z) > 3;
+        const verb = /^!(\w+)/.exec(command)?.[1] ?? '';
+        if (verb === 'consume' && (now.food > before.food || now.hp > before.hp)) return true;
+        const moving = /^(moveAway|searchForBlock|searchForEntity|goToSurface|goToPlayer|followPlayer|goToCoordinates|goToRememberedPlace)$/.test(verb);
+        return (moving || !verb) && Math.hypot(now.pos.x - before.pos.x, now.pos.z - before.pos.z) > 3;
     }
 
     /** A command that never comes back would otherwise wedge the loop in "something is running" for ever. */
@@ -709,7 +719,7 @@ export class TacticalLoop {
      */
     record(command, output, goalId, before, epoch = this.epoch, countsTowardGoal = true) {
         if (epoch !== this.epoch) return; // the loop was stopped while this command was running
-        const progressed = this.madeProgress(before);
+        const progressed = this.madeProgress(before, command);
         const said = output.replace(BENIGN, '').replace(/\s+/g, ' ').trim();
         this.noteAbsence(command, said);
 
