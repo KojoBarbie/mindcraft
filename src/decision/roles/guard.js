@@ -11,6 +11,7 @@ import { isNight } from '../daylight.js';
  * @property {number} [radius] default 24
  * @property {(text: string) => void} [say]
  * @property {() => {kills: Record<string, number>, torches: number}} [report] the night's tally, reset on read
+ * @property {(post: {x: number, y: number, z: number}) => void} [onPost] told where the post is (to keep exploring near it)
  */
 
 /**
@@ -31,6 +32,7 @@ export function createGuardRole(options = {}) {
     let wasNight = false;
     let ready = false;
     let toldNotReady = false;
+    let leashed = false;
 
     return {
         name: 'guard',
@@ -39,6 +41,7 @@ export function createGuardRole(options = {}) {
         /** @param {any} saved */
         restore(saved) {
             if (!options.center && saved?.post && [saved.post.x, saved.post.y, saved.post.z].every(Number.isFinite)) post = saved.post;
+            leashed = false;
         },
         /**
          * A guard keeps watch at night instead of digging in, but only when fit to fight: an iron sword and
@@ -54,6 +57,10 @@ export function createGuardRole(options = {}) {
          */
         step(loop, snapshot, isFood) {
             post ??= { x: Math.floor(snapshot.pos.x), y: Math.floor(snapshot.pos.y), z: Math.floor(snapshot.pos.z) };
+            if (!leashed) {
+                options.onPost?.(post);
+                leashed = true;
+            }
             const night = snapshot.dimension === 'overworld' && isNight(snapshot.timeOfDay);
             const gear = snapshot.inventory;
             const hadReady = ready;
@@ -89,7 +96,8 @@ export function createGuardRole(options = {}) {
                 if (!(inv.iron_chestplate > 0) && !(inv.diamond_chestplate > 0)) short.push(() => ensureGoal(loop.goals, haveItem('iron_chestplate', 1), 975));
                 if (!(inv.shield > 0)) short.push(() => ensureGoal(loop.goals, haveItem('shield', 1), 970));
                 if ((inv.torch ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
-                if (food < 4) short.push(() => ensureGoal(loop.goals, haveFood(8), 995));
+                // a little food is enough to heal between fights; asking for eight sent it far afield for animals
+                if (food < 2) short.push(() => ensureGoal(loop.goals, haveFood(4), 995));
                 if (short.length > 0) {
                     for (const queue of short) queue();
                     return null;

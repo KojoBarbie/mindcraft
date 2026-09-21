@@ -1496,6 +1496,11 @@ export async function explore(bot, distance = 32) {
      **/
     bot.exploreHeading ??= Math.random() * 2 * Math.PI;
     const start = bot.entity.position.clone();
+    // a role tied to a place (the guard's post) sets a leash: a guard looking for animals walked 350 blocks out
+    // to sea and spent the night there. Past the leash, head back towards the post, a little off to one side.
+    const leash = bot.exploreLeash;
+    if (leash && Math.hypot(start.x + Math.cos(bot.exploreHeading) * distance - leash.x, start.z + Math.sin(bot.exploreHeading) * distance - leash.z) > leash.radius)
+        bot.exploreHeading = Math.atan2(leash.z - start.z, leash.x - start.x) + (Math.random() - 0.5) * Math.PI / 2;
     for (let turn = 0; turn < 4; turn++) {
         if (bot.interrupt_code) return false;
         const heading = bot.exploreHeading;
