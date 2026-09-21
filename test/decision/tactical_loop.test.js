@@ -491,6 +491,32 @@ test('guard: a command repeated to no effect is banned and not fired again', asy
     assert.ok(events.some(event => event.type === 'banned'));
 });
 
+test('guard: a banned planned command costs no paid call, and every call made is charged', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    /** @type {string[][]} */
+    const offered = [];
+    const provider = {
+        decide: (/** @type {any} */ request) => {
+            offered.push(request.questions[0].options ?? []);
+            return resilient([createRulesProvider()]).decide(request);
+        },
+    };
+    const guard = new LoopGuard({ repeatLimit: 2, stallAfter: 99, failAfter: 99 });
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    const loop = new TacticalLoop(agent, provider, queue, data, {
+        guard, execute: command => { agent.commands.push(command); return Promise.resolve('ok'); },
+    });
+    for (let i = 0; i < 3; i++) {
+        await loop.decide();
+        await tick();
+    }
+    // the first two rounds offered the planned collect; once it was banned it was no longer offered at all
+    assert.ok(offered[0].includes('collect_blocks') && offered[1].includes('collect_blocks'));
+    assert.ok(!offered.at(-1)?.includes('collect_blocks'), JSON.stringify(offered.at(-1)));
+    assert.equal(guard.usage().decisions.hour, offered.length); // each call was charged exactly once
+});
+
 test('a provider that throws does not kill the loop', async () => {
     const agent = fakeAgent({ world: ['oak_log'] });
     const broken = { decide: () => Promise.reject(new Error('boom')) };

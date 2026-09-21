@@ -7,13 +7,13 @@
 // Two things keep it responsive. A command is fired without waiting for it to finish, so the loop keeps
 // ticking while the bot digs; and while something is running the only question asked is "should this stop?".
 import { chooseCommand } from './choose.js';
-import { listActions } from './catalog.js';
+import { buildCommand, listActions, listQuantities, maxQuantity } from './catalog.js';
 import { createKnowledge } from './knowledge.js';
 import { describeGoal, isDone } from './goals.js';
 import { focusFor, planGoal } from './planner.js';
 import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
-import { LoopGuard } from './guard.js';
+import { LoopGuard, metered } from './guard.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./snapshot.js').RecentAction} RecentAction */
@@ -63,6 +63,22 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {LoopGuard} [guard] stall and repeat detection and budgets; a default one if omitted
  */
 
+/**
+ * The command a planned action would issue, to check it against the guard's bans before paying to ask.
+ * @param {import('./catalog.js').CatalogContext} ctx
+ * @param {string} id
+ * @param {{target?: string, quantity?: number}} preset
+ */
+function buildPlannedCommand(ctx, id, preset) {
+    try {
+        const quantities = listQuantities(ctx, id, preset.target);
+        const quantity = quantities.length > 0 ? Math.min(preset.quantity ?? quantities[0], maxQuantity(ctx, id, preset.target)) : undefined;
+        return buildCommand(ctx, { id, target: preset.target, quantity });
+    } catch {
+        return '';
+    }
+}
+
 export class TacticalLoop {
     /**
      * @param {any} agent a Mindcraft Agent (bot, isIdle(), actions, name)
@@ -73,7 +89,6 @@ export class TacticalLoop {
      */
     constructor(agent, provider, goals, data, options = {}) {
         this.agent = agent;
-        this.provider = provider;
         this.goals = goals;
         this.data = data;
         this.periodMs = options.periodMs ?? 1500;
@@ -88,6 +103,8 @@ export class TacticalLoop {
         this.onEvent = options.onEvent ?? (() => {});
         this.execute = options.execute;
         this.guard = options.guard ?? new LoopGuard();
+        // Every call through the loop is charged to the guard, retries and failures included.
+        this.provider = metered(provider, this.guard);
         /** @type {number | null} the goal the guard's counters are about */
         this.guardGoalId = null;
 
@@ -241,8 +258,6 @@ export class TacticalLoop {
             this.onEvent({ type: 'error', detail: `stop failed: ${error instanceof Error ? error.message : String(error)}` });
         } finally {
             this.stopping = false;
-        // Bumped by stop(). Anything that was waiting on an answer when the loop stopped must not act on it.
-        this.epoch = 0;
         }
     }
 
@@ -297,7 +312,7 @@ export class TacticalLoop {
         }
 
         const snapshot = this.snapshotFor(goalText);
-        const verdict = this.guard.check({ ...this.progressSignature(snapshot), goal: goalText });
+        const verdict = this.guard.check({ inventory: snapshot.inventory, pos: snapshot.pos, goal: goalText });
         if (verdict.action === 'shake' && this.guard.shouldGiveUp()) {
             // Commands keep "succeeding" and nothing changes: the #810 failure mode. Move on.
             this.goals.giveUp(queued.id);
@@ -324,7 +339,11 @@ export class TacticalLoop {
         // Shaking: the plan has been followed for a while with nothing to show for it, so for one decision it
         // is not on offer and the model has to try something else.
         const shaking = verdict.action === 'shake';
-        const planned = wanted && possible.has(wanted) && !shaking ? wanted : null;
+        const banned = new Set(verdict.banned ?? []);
+        const presetFor = /** @param {string} id */ id => ({ target: focus?.target, quantity: searching ? undefined : focus?.quantity });
+        let planned = wanted && possible.has(wanted) && !shaking ? wanted : null;
+        // A banned planned command is dropped before asking, not after: a paid call that picks it would be wasted.
+        if (planned && banned.has(buildPlannedCommand(ctx, planned, presetFor(planned)))) planned = null;
         let only = [...new Set([planned, ...SITUATIONAL].filter(id => id && possible.has(id)))];
         if (shaking) this.onEvent({ type: 'shake', detail: { goal: goalText, reason: verdict.reason } });
         if (only.length === 0) return;
@@ -333,21 +352,20 @@ export class TacticalLoop {
         if (focus) state.next = searching ? `find ${focus.target} first, then ${focus.text}` : focus.text;
         if (planned) state.plan_action = planned;
         if (shaking) state.stuck = verdict.reason;
-        const banned = new Set(verdict.banned ?? []);
 
         const before = this.fingerprint(snapshot);
-        const preset = planned && focus ? { [planned]: { target: focus.target, quantity: searching ? undefined : focus.quantity } } : undefined;
+        const preset = planned && focus ? { [planned]: presetFor(planned) } : undefined;
         let chosen = await chooseCommand(this.provider, ctx, state, { only: /** @type {string[]} */ (only), preset });
-        this.guard.recordSpend({ decisions: chosen.decisions, inputTokens: chosen.inputTokens ?? 0 });
-        // A command repeated to no effect is banned for a while. If the model picks it anyway, take that
-        // action off the table and ask once more.
+        // The model can still land on a banned command through a situational action. Take that action off
+        // the table and ask once more; if that is banned too, the round was fruitless and counts as such.
         if (banned.has(chosen.command)) {
             this.onEvent({ type: 'banned pick', detail: chosen.command });
             only = only.filter(id => id !== chosen.action);
-            if (only.length === 0) return;
-            chosen = await chooseCommand(this.provider, ctx, state, { only: /** @type {string[]} */ (only) });
-            this.guard.recordSpend({ decisions: chosen.decisions, inputTokens: chosen.inputTokens ?? 0 });
-            if (banned.has(chosen.command)) return;
+            if (only.length > 0) chosen = await chooseCommand(this.provider, ctx, state, { only: /** @type {string[]} */ (only) });
+            if (only.length === 0 || banned.has(chosen.command)) {
+                this.guard.recordNoop();
+                return;
+            }
         }
 
         if (epoch !== this.epoch) return;
@@ -360,8 +378,7 @@ export class TacticalLoop {
 
         this.lastDecisionAt = Date.now();
         this.onEvent({ type: 'decision', detail: { goal: goalText, ...chosen } });
-        // spend was counted above; this counts the decision for stall and repeat detection only
-        const repeat = this.guard.recordDecision(chosen.command, { decisions: 0, inputTokens: 0, usd: 0 });
+        const repeat = this.guard.recordDecision(chosen.command);
         if (repeat.banned) this.onEvent({ type: 'banned', detail: { command: repeat.banned, repeats: repeat.repeats } });
         // While a goal has no workable plan the bot is only casting about for the missing piece. Letting that
         // count as progress would reset the counter that eventually gives the goal up.
@@ -411,7 +428,6 @@ export class TacticalLoop {
             questions: [{ id: 'interrupt', type: 'noul', prompt: `The bot is busy with "${running}". Should it stop right now and do something else?` }],
         });
         const answer = result.answers.interrupt;
-        this.guard.recordSpend({ decisions: 1, inputTokens: result.inputTokens ?? 0 });
         this.lastDecisionAt = Date.now();
         if (epoch !== this.epoch || answer.type !== 'noul' || !answer.value) return;
         this.lastInterruptAt = Date.now();

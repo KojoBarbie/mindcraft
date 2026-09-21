@@ -1,6 +1,6 @@
 // @ts-check
-// What keeps an autonomous bot from being a liability: it notices when nothing is changing, when it is doing
-// the same thing over and over, and when it has spent too much. Mindcraft's own self-prompting loop has none
+// What keeps an autonomous bot from being a liability: it notices when nothing is getting better, when it keeps
+// doing the same fruitless thing, and when it has spent too much. Mindcraft's own self-prompting loop has none
 // of this, and the upstream issue tracker has a report of it running up $100 in a day on one stuck task.
 //
 // Kept as a pure decision-maker with an injectable clock: the tactical loop asks "may I decide?", reports
@@ -10,63 +10,51 @@
  * @typedef {object} ProgressFacts what "getting somewhere" means, gathered by the caller each decision
  * @property {Record<string, number>} inventory
  * @property {{x: number, y: number, z: number}} pos
- * @property {number} hp
- * @property {number} food
  * @property {string} goal the goal being worked on; a new goal is progress by definition
  */
 
 /**
- * @typedef {object} Spend
- * @property {number} [decisions] provider calls made for this decision
+ * @typedef {object} Spend what one provider call cost, as far as anyone knows
+ * @property {number} [decisions] provider requests made (retries included)
  * @property {number} [inputTokens]
- * @property {number} [usd] estimated cost
+ * @property {number} [outputTokens]
+ * @property {number} [usd] if the provider knows; otherwise estimated from tokens and the configured prices
  */
 
 /**
  * @typedef {object} Verdict
  * @property {'go' | 'shake' | 'pause'} action
- *   go: carry on. shake: stop following the plan for one decision and try something else.
- *   pause: do not decide at all right now.
+ *   go: carry on. shake: for this one decision, do not follow the plan; try something else.
+ *   pause: do not call the provider at all right now.
  * @property {string} [reason] short, for logs and for the model's state
  * @property {number} [retryAfterMs] pause only: when it is worth asking again
- * @property {string[]} [banned] commands that must not be offered right now
+ * @property {string[]} [banned] commands that must not be issued right now
  */
 
 /**
  * @typedef {object} GuardOptions
- * @property {number} [stallAfter] decisions with no progress before the plan is shaken up
- * @property {number} [failAfter] decisions with no progress before the goal is given up
- * @property {number} [repeatLimit] identical commands within the window before that command is banned
+ * @property {number} [stallAfter] decisions without progress before the plan is shaken up, and again every
+ *   this many after that
+ * @property {number} [failAfter] decisions without progress before the goal is given up
+ * @property {number} [repeatLimit] fruitless repeats of one command within the window before it is banned
  * @property {number} [repeatWindowMs]
  * @property {number} [banForMs] how long a banned command stays banned
+ * @property {string[]} [repeatExempt] command prefixes never banned: waiting and self-defence are repeated by
+ *   nature, and banning them mid-fight leaves the bot defenceless
+ * @property {number} [cellSize] blocks; moving into a cell not visited for this goal counts as progress
  * @property {number} [maxDecisionsPerHour] 0 or undefined = no limit
  * @property {number} [maxDecisionsPerDay]
- * @property {number} [maxTokensPerHour]
+ * @property {number} [maxTokensPerHour] input + output
  * @property {number} [maxTokensPerDay]
- * @property {number} [maxUsdPerHour]
+ * @property {number} [maxUsdPerHour] needs a price: inputUsdPerMillion and/or outputUsdPerMillion
  * @property {number} [maxUsdPerDay]
- * @property {number} [inputUsdPerMillion] price used to estimate usd when a provider reports only tokens
- *   (Jev: 0.042). Output is not counted: Jev does not charge for it, and #10 measures the rest
+ * @property {number} [inputUsdPerMillion] Jev: 0.042; gpt-5-nano: 0.05
+ * @property {number} [outputUsdPerMillion] Jev: 0; gpt-5-nano: 0.40 (reasoning tokens are billed as output)
  * @property {() => number} [now] injectable clock
  */
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
-
-/**
- * Two positions are "the same place" unless the bot has actually gone somewhere. Rounding keeps idle drift,
- * mob shoving and pathfinder jitter from reading as progress.
- * @param {ProgressFacts} facts
- */
-function progressKey(facts) {
-    const inventory = Object.entries(facts.inventory)
-        .filter(([, count]) => count > 0)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, count]) => `${name}:${count}`)
-        .join(',');
-    const pos = [facts.pos.x, facts.pos.y, facts.pos.z].map(n => Math.round(n / 8)).join(',');
-    return `${facts.goal}|${inventory}|${pos}|${Math.round(facts.hp)}|${Math.round(facts.food)}`;
-}
 
 /** A rolling window of stamped amounts, for "how much in the last hour / day". */
 class Window {
@@ -80,7 +68,7 @@ class Window {
 
     /** @param {number} at @param {number} amount */
     add(at, amount) {
-        if (amount <= 0) return;
+        if (!(amount > 0)) return;
         this.entries.push({ at, amount });
         this.sum += amount;
     }
@@ -88,9 +76,8 @@ class Window {
     /** @param {number} now */
     total(now) {
         const cutoff = now - this.spanMs;
-        let dropped = 0;
-        while (this.entries.length > 0 && this.entries[0].at <= cutoff) dropped += (this.entries.shift()?.amount ?? 0);
-        this.sum -= dropped;
+        while (this.entries.length > 0 && this.entries[0].at <= cutoff) this.sum -= this.entries.shift()?.amount ?? 0;
+        if (this.entries.length === 0) this.sum = 0; // do not let rounding error outlive the entries
         return this.sum;
     }
 
@@ -108,22 +95,33 @@ export class LoopGuard {
         this.repeatLimit = options.repeatLimit ?? 3;
         this.repeatWindowMs = options.repeatWindowMs ?? 60_000;
         this.banForMs = options.banForMs ?? 120_000;
+        this.repeatExempt = options.repeatExempt ?? ['!stay', '!attack', '!moveAway(24)'];
+        this.cellSize = options.cellSize ?? 8;
         this.now = options.now ?? Date.now;
         this.inputUsdPerMillion = options.inputUsdPerMillion ?? 0;
+        this.outputUsdPerMillion = options.outputUsdPerMillion ?? 0;
         this.limits = {
             decisions: { hour: options.maxDecisionsPerHour ?? 0, day: options.maxDecisionsPerDay ?? 0 },
             tokens: { hour: options.maxTokensPerHour ?? 0, day: options.maxTokensPerDay ?? 0 },
             usd: { hour: options.maxUsdPerHour ?? 0, day: options.maxUsdPerDay ?? 0 },
         };
+        // A spending cap that can never trip is worse than none: it looks like protection.
+        if ((this.limits.usd.hour > 0 || this.limits.usd.day > 0) && this.inputUsdPerMillion <= 0 && this.outputUsdPerMillion <= 0)
+            throw new Error('guard: maxUsdPerHour/maxUsdPerDay need a price (inputUsdPerMillion and/or outputUsdPerMillion); '
+                + 'without one every call is estimated at $0 and the cap never trips. Use maxDecisionsPerDay if the price is unknown.');
         this.spent = {
             decisions: { hour: new Window(HOUR), day: new Window(DAY) },
             tokens: { hour: new Window(HOUR), day: new Window(DAY) },
             usd: { hour: new Window(HOUR), day: new Window(DAY) },
         };
-
+        // per-goal state; see reset()
         /** @type {string | null} */
-        this.lastKey = null;
+        this.goal = null;
         this.stillFor = 0;
+        /** @type {Map<string, number>} */
+        this.bestItems = new Map();
+        /** @type {Set<string>} */
+        this.visited = new Set();
         /** @type {{cmd: string, at: number}[]} */
         this.history = [];
         /** @type {Map<string, number>} command -> banned until */
@@ -155,6 +153,34 @@ export class LoopGuard {
     }
 
     /**
+     * Did these facts beat anything seen so far for this goal? Progress means getting better, not merely
+     * different: an item count above its best, or a part of the map not visited yet. Standing still while
+     * health regenerates, wobbling across a cell border, or pacing between two spots is not progress.
+     * @param {ProgressFacts} facts
+     */
+    improved(facts) {
+        const cell = [facts.pos.x, facts.pos.y, facts.pos.z].map(n => Math.floor(n / this.cellSize)).join(',');
+        if (this.visited.size === 0) {
+            // the state a goal starts from is the baseline, not progress
+            for (const [name, count] of Object.entries(facts.inventory)) this.bestItems.set(name, count);
+            this.visited.add(cell);
+            return false;
+        }
+        let better = false;
+        for (const [name, count] of Object.entries(facts.inventory)) {
+            if (count > (this.bestItems.get(name) ?? 0)) {
+                this.bestItems.set(name, count);
+                better = true;
+            }
+        }
+        if (!this.visited.has(cell)) {
+            this.visited.add(cell);
+            better = true;
+        }
+        return better;
+    }
+
+    /**
      * May the loop decide now, and under what restrictions?
      * @param {ProgressFacts} facts
      * @returns {Verdict}
@@ -164,32 +190,36 @@ export class LoopGuard {
         const paused = this.overBudget();
         if (paused) return paused;
 
-        const key = progressKey(facts);
-        if (key !== this.lastKey) {
-            this.lastKey = key;
+        if (facts.goal !== this.goal) {
+            this.reset();
+            this.goal = facts.goal;
+        }
+        if (this.improved(facts)) {
             this.stillFor = 0;
+            this.history = []; // repeating a command that is paying off is fine
         }
         const banned = this.bannedNow(now);
-        if (this.stillFor >= this.stallAfter)
-            return { action: 'shake', reason: `nothing has changed for ${this.stillFor} decisions`, banned };
+        // Shake once every `stallAfter` fruitless decisions, not on every decision after the first stall: the
+        // model gets one nudge to try something else, then the plan gets another chance.
+        if (this.stillFor > 0 && this.stillFor % this.stallAfter === 0)
+            return { action: 'shake', reason: `nothing has improved for ${this.stillFor} decisions`, banned };
         return { action: 'go', banned };
     }
 
-    /** Has this goal been stuck long enough to give up on? Checked after check() returns 'shake'. */
+    /** Has this goal gone nowhere for long enough to give up on? */
     shouldGiveUp() {
         return this.stillFor >= this.failAfter;
     }
 
     /**
-     * Record a decision that was acted on. `spend` is what the provider reported.
+     * Record a decision that was acted on. Spending is recorded separately (recordSpend), per provider call.
      * @param {string} command
-     * @param {Spend} [spend]
      * @returns {{banned?: string, repeats?: number}} whatever the caller should log
      */
-    recordDecision(command, spend = {}) {
+    recordDecision(command) {
         const now = this.now();
         this.stillFor++;
-        this.recordSpend(spend);
+        if (this.repeatExempt.some(prefix => command.startsWith(prefix))) return {};
 
         this.history.push({ cmd: command, at: now });
         const cutoff = now - this.repeatWindowMs;
@@ -202,15 +232,21 @@ export class LoopGuard {
         return { repeats };
     }
 
+    /** A decision round that ended without acting (everything on offer was banned) still counts as fruitless. */
+    recordNoop() {
+        this.stillFor++;
+    }
+
     /**
-     * Count what a provider call cost, without it counting as a decision taken (the interrupt question).
+     * Count what a provider call cost. Called for every call, including retries and calls that failed.
      * @param {Spend} [spend]
      */
     recordSpend(spend = {}) {
         const now = this.now();
         const decisions = spend.decisions ?? 1;
-        const tokens = spend.inputTokens ?? 0;
-        const usd = spend.usd ?? (tokens * this.inputUsdPerMillion) / 1e6;
+        const tokens = (spend.inputTokens ?? 0) + (spend.outputTokens ?? 0);
+        const usd = spend.usd
+            ?? ((spend.inputTokens ?? 0) * this.inputUsdPerMillion + (spend.outputTokens ?? 0) * this.outputUsdPerMillion) / 1e6;
         this.spent.decisions.hour.add(now, decisions);
         this.spent.decisions.day.add(now, decisions);
         this.spent.tokens.hour.add(now, tokens);
@@ -219,12 +255,14 @@ export class LoopGuard {
         this.spent.usd.day.add(now, usd);
     }
 
-    /** The goal changed or finished: nothing that came before says anything about the new one. */
+    /** A new goal: nothing that came before says anything about it. Spending is not reset. */
     reset() {
-        this.lastKey = null;
+        this.goal = null;
         this.stillFor = 0;
+        this.bestItems = new Map();
+        this.visited = new Set();
         this.history = [];
-        this.bans.clear();
+        this.bans = new Map();
     }
 
     /** @param {number} [now] */
@@ -243,4 +281,30 @@ export class LoopGuard {
             stillFor: this.stillFor,
         };
     }
+}
+
+/**
+ * Wrap a provider so that every call made through it is charged to the guard: retries and failed calls
+ * included, which a caller counting only successful answers would miss.
+ * @template {{decide: (request: any) => Promise<any>}} P
+ * @param {P} provider
+ * @param {LoopGuard} guard
+ * @returns {P}
+ */
+export function metered(provider, guard) {
+    return /** @type {P} */ ({
+        ...provider,
+        async decide(/** @type {any} */ request) {
+            try {
+                const result = await provider.decide(request);
+                guard.recordSpend({ decisions: result.attempts ?? 1, inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 });
+                return result;
+            } catch (error) {
+                // the request went out (and may be billed) even though no answer came back
+                const attempts = /** @type {any} */ (error)?.attempts;
+                guard.recordSpend({ decisions: typeof attempts === 'number' ? attempts : 1 });
+                throw error;
+            }
+        },
+    });
 }

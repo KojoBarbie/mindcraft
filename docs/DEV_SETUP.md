@@ -154,18 +154,33 @@ to beat, and it is what the integration test uses to get itself a wooden pickaxe
 What keeps an autonomous bot from being a liability — Mindcraft's own self-prompting loop has none of this, and
 the upstream tracker has a report of it spending $100 in a day on one stuck task:
 
-- **Stall**: if inventory, position (in 8-block cells), health, food and goal have not changed for `stallAfter`
-  decisions, the planned action is taken off the table for a decision ("shake"); after `failAfter` the goal
-  is given up and the queue moves on. This catches commands that keep "succeeding" while nothing happens.
-- **Repeats**: the same command `repeatLimit` times within `repeatWindowMs` is banned for `banForMs`.
-- **Budgets**: decisions, input tokens and estimated USD, per rolling hour and day. When one is used up the
-  loop stops calling the provider — the "should this stop?" question included — until the window frees up.
-  The reflex modes keep the bot alive meanwhile.
-- **Unplannable goals** (a nether star in the overworld) count a failure every `tactical.stuckGoalMs`.
+- **Stall**: progress means *beating the best so far for this goal* — more of some item than ever, or an
+  8-block cell not visited yet. Being merely different does not count: wobbling across a cell border, pacing
+  between two spots, using items up or regenerating health are not progress. Every `stallAfter` fruitless
+  decisions the planned action is withheld once ("shake"); after `failAfter` the goal is given up.
+- **Repeats**: the same command `repeatLimit` times within `repeatWindowMs` *without progress* is banned for
+  `banForMs`. Progress clears the count, so collecting one log at a time is fine. Waiting, fighting and
+  fleeing are exempt. A banned planned command is dropped before the model is asked, not after.
+- **Budgets**: decisions, tokens (input + output) and estimated USD, per rolling hour and day. Every provider
+  call made by the loop is charged — the "should this stop?" question, retries and failed calls included.
+  When a budget is used up the loop stops calling the provider until the window frees up; the reflex modes
+  keep the bot alive meanwhile. A USD cap needs a price (`inputUsdPerMillion` / `outputUsdPerMillion`) and is
+  refused without one; use `maxDecisionsPerDay` if the price is unknown.
+
+A goal can be given up three ways, each catching a different failure:
+
+| Rule | Counts | Catches |
+|---|---|---|
+| `GoalQueue` three strikes | commands that report failure | a target that keeps failing ("no path") |
+| `tactical.stuckGoalMs` (60 s) | time with no plan at all | an unobtainable item (a nether star) |
+| `guard.failAfter` (12) | decisions that achieved nothing | commands that "succeed" while nothing happens |
+
+For scale: a bot deciding every 1.5 s around the clock makes ~57,600 decisions a day. At ~300 input tokens
+each that is ~$0.73/day on Jev; a $1/day cap would cut a busy bot off late in the day.
 
 ```json
 { "decision_model": "jev",
-  "guard": { "maxUsdPerDay": 1, "inputUsdPerMillion": 0.042, "stallAfter": 6, "failAfter": 12 },
+  "guard": { "maxUsdPerDay": 2, "inputUsdPerMillion": 0.042, "stallAfter": 6, "failAfter": 12 },
   "goals": [{ "type": "have_item", "item": "torch", "count": 16 }] }
 ```
 

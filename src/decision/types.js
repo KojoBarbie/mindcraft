@@ -67,6 +67,7 @@
  * @property {Record<string, Answer>} answers keyed by question id; one per question. `confidence` may be left
  *   undefined by a provider; the resilient wrapper normalises it to null
  * @property {number | null} [inputTokens] as reported by the provider
+ * @property {number | null} [outputTokens] as reported by the provider; reasoning models bill reasoning here
  */
 
 /**
@@ -74,6 +75,7 @@
  * @typedef {object} DecisionResult
  * @property {Record<string, Answer>} answers
  * @property {number | null} inputTokens
+ * @property {number | null} [outputTokens]
  * @property {string} provider name of the provider that answered
  * @property {number} latencyMs wall time including retries and fallbacks
  * @property {number} attempts calls made across all providers
