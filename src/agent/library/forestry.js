@@ -3,7 +3,7 @@
 // log walls and floors of buildings are left alone.
 import Vec3 from 'vec3';
 import * as world from './world.js';
-import { goToPosition, log, pickupNearbyItems, placeBlock } from './skills.js';
+import { craftRecipe, goToPosition, log, pickupNearbyItems, placeBlock } from './skills.js';
 import { isUnreachable, markUnreachable } from './unreachable.js';
 
 const GROUND = ['dirt', 'grass_block', 'podzol', 'coarse_dirt', 'rooted_dirt', 'mud', 'moss_block', 'mycelium'];
@@ -35,6 +35,51 @@ function treeLogs(bot, base, limit = 48) {
 
 function eyeDistance(bot, pos) {
     return bot.entity.position.offset(0, 1.6, 0).distanceTo(pos.offset(0.5, 0.5, 0.5));
+}
+
+const SCAFFOLD = ['dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', ...Object.keys(SAPLING_OF).map(name => name.replace('_log', '_planks'))];
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Jump and put a block under the feet: one block higher. Leaves over the head are cleared first.
+ * @returns {Promise<boolean>} false when there is nothing to stand on or no room overhead
+ */
+async function climbOne(bot) {
+    const scaffold = bot.inventory.items().find(item => SCAFFOLD.includes(item.name));
+    if (!scaffold) return false;
+    const feet = bot.entity.position.floored();
+    for (const dy of [2, 3]) {
+        const above = bot.blockAt(feet.offset(0, dy, 0));
+        if (!above || above.name === 'air') continue;
+        if (!above.name.includes('leaves')) return dy === 3; // a log or the like: dig it from here instead
+        await bot.dig(above, true).catch(() => {});
+    }
+    const ground = bot.blockAt(feet.offset(0, -1, 0));
+    if (!ground || ground.boundingBox !== 'block') return false;
+    await bot.equip(scaffold, 'hand');
+    await bot.look(bot.entity.yaw, -Math.PI / 2, true);
+    bot.setControlState('jump', true);
+    try {
+        for (let waited = 0; bot.entity.position.y < feet.y + 1.05 && waited < 1000; waited += 50) await sleep(50);
+        await bot.placeBlock(ground, new Vec3(0, 1, 0));
+    } catch {
+        return false;
+    } finally {
+        bot.setControlState('jump', false);
+    }
+    await sleep(250);
+    return bot.entity.position.y >= feet.y + 0.9;
+}
+
+/** Back down a pillar, digging the blocks it stands on (they drop and are picked up at the bottom). */
+async function climbDown(bot, floorY) {
+    for (let i = 0; i < 8 && bot.entity.position.y > floorY + 0.5; i++) {
+        const under = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
+        if (!under || under.name === 'air') { await sleep(300); continue; }
+        await bot.tool.equipForBlock(under).catch(() => {});
+        await bot.dig(under, true).catch(() => {});
+        await sleep(300);
+    }
 }
 
 /** Plant saplings on spots remembered from earlier fellings, where the bot has saplings for them. */
@@ -107,6 +152,19 @@ export async function chopTree(bot, center = null, radius = 32) {
         await goToPosition(bot, base.x, base.y, base.z, 0).catch(() => false);
         for (const pos of logs) await tryDig(pos);
     }
+    // what is still out of reach (acacia branches, tall spruce): climb the stump on a pillar, a block at a time
+    if (bot.blockAt(base)?.name === 'air' && logs.some(pos => isLog(bot.blockAt(pos)))) {
+        const floorY = bot.entity.position.y;
+        // something to stand on: four planks from one log (they come back when the pillar is dug down)
+        const planks = species.replace('_log', '_planks');
+        if (!bot.inventory.items().some(item => SCAFFOLD.includes(item.name)) && SCAFFOLD.includes(planks))
+            await craftRecipe(bot, planks, 1).catch(() => false);
+        for (let climbed = 0; climbed < 6 && logs.some(pos => isLog(bot.blockAt(pos))); climbed++) {
+            if (!await climbOne(bot)) break;
+            for (const pos of logs) await tryDig(pos);
+        }
+        await climbDown(bot, floorY);
+    }
     await new Promise(resolve => setTimeout(resolve, 1500)); // let the logs and the first saplings drop
     await pickupNearbyItems(bot);
     const sapling = SAPLING_OF[species];
@@ -119,21 +177,55 @@ export async function chopTree(bot, center = null, radius = 32) {
     return taken > 0;
 }
 
+const CONTAINERS = ['chest', 'trapped_chest', 'barrel'];
+
+/**
+ * The chest at `target`, or one within six blocks of it; failing that, make one and put it down beside the
+ * bot. The spot given is not always a place a chest can be (a demo's "where it started" was a tree top), and a
+ * lumberjack with no chest to fill stood there all day saying so.
+ */
+async function findOrPlaceChest(bot, target) {
+    const here = bot.blockAt(target);
+    if (here && CONTAINERS.includes(here.name)) return here;
+    const near = world.getNearestBlocksNamed(bot, CONTAINERS, block => block.position.distanceTo(target) <= 6, 12, 1)[0];
+    if (near) return near;
+    if (!bot.inventory.items().some(item => item.name === 'chest')) {
+        const log_ = bot.inventory.items().find(item => item.name.endsWith('_log') && SAPLING_OF[item.name]);
+        if (log_ && !bot.inventory.items().some(item => item.name.endsWith('_planks') && item.count >= 8))
+            await craftRecipe(bot, log_.name.replace('_log', '_planks'), 3).catch(() => false);
+        await craftRecipe(bot, 'chest', 1).catch(() => false);
+    }
+    if (!bot.inventory.items().some(item => item.name === 'chest')) {
+        log(bot, `There is no chest at ${target}, and I could not make one.`);
+        return null;
+    }
+    const feet = bot.entity.position.floored();
+    for (const [dx, dz] of [[2, 0], [0, 2], [-2, 0], [0, -2], [1, 1], [-1, -1]]) {
+        const spot = feet.offset(dx, 0, dz);
+        const below = bot.blockAt(spot.offset(0, -1, 0));
+        if (bot.blockAt(spot)?.name !== 'air' || !below || below.boundingBox !== 'block' || below.name.includes('leaves')) continue;
+        if (await placeBlock(bot, 'chest', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
+            log(bot, `There was no chest at ${target}: put one down at ${spot}.`);
+            return bot.blockAt(spot);
+        }
+    }
+    log(bot, `There is no chest at ${target}, and nowhere beside me to put one.`);
+    return null;
+}
+
 /**
  * Put all logs (and spare saplings beyond a few for replanting) into the chest at x, y, z.
  * @returns {Promise<number>} how many logs went in
  */
 export async function depositLogs(bot, x, y, z) {
-    const chestPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
-    if (!await goToPosition(bot, chestPos.x, chestPos.y, chestPos.z, 2)) {
-        log(bot, `Could not get to the chest at ${chestPos}.`);
+    const target = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+    if (!await goToPosition(bot, target.x, target.y, target.z, 2)) {
+        log(bot, `Could not get to the chest at ${target}.`);
         return 0;
     }
-    const chestBlock = bot.blockAt(chestPos);
-    if (!chestBlock || !['chest', 'trapped_chest', 'barrel'].includes(chestBlock.name)) {
-        log(bot, `There is no chest at ${chestPos} (found ${chestBlock?.name}).`);
-        return 0;
-    }
+    const chestBlock = await findOrPlaceChest(bot, target);
+    if (!chestBlock) return 0;
+    const chestPos = chestBlock.position;
     const container = await bot.openContainer(chestBlock);
     let moved = 0;
     try {
