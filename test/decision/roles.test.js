@@ -21,6 +21,8 @@ test('guard: the post survives a restart, and at dusk a guard far from it goes b
     again.restore(saved);
     const far = again.step(l, snap({ pos: { x: 300, y: 70, z: 300 }, inventory: kit, timeOfDay: 11_500 }), isFood);
     assert.equal(far, '!goToward(0, 0)');
+    const cave = again.step(l, snap({ pos: { x: 90, y: -6, z: 0 }, inventory: kit, timeOfDay: 14_000 }), isFood);
+    assert.equal(cave, '!goToSurface', 'deep underground and far off: up first');
     const home = again.step(l, snap({ inventory: kit, timeOfDay: 14_000 }), isFood);
     assert.match(String(home), /^!patrol\(0, 64, 0, 24\)$/);
 });
