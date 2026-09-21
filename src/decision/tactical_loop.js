@@ -15,7 +15,8 @@ import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
 import { LoopGuard, metered } from './guard.js';
 import { STATE_VERSION, fingerprint, loadJSON, saveJSON } from './persistence.js';
-import { RECORDED_EVENTS, createTelemetry, describeCall, estimateUsd } from './telemetry.js';
+import { RECORDED_EVENTS, createTelemetry, describeCall, estimateUsd, priceOf } from './telemetry.js';
+import { createStrategist, isAddressedTo } from './strategist.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./snapshot.js').RecentAction} RecentAction */
@@ -120,6 +121,13 @@ export class TacticalLoop {
         this.commandTimeoutMs = options.commandTimeoutMs ?? 120_000;
         this.stuckGoalMs = options.stuckGoalMs ?? 60_000;
         this.onLowConfidence = options.onLowConfidence;
+        /** @type {ReturnType<typeof import('./strategist.js').createStrategist> | null} set by attachTacticalLoop */
+        this.strategist = null;
+        /**
+         * Set by attachTacticalLoop when a strategist is on: takes a player's chat line, returns true if handled.
+         * @type {((username: string, message: string) => boolean) | null}
+         */
+        this.hearPlayer = null;
         const onEvent = options.onEvent ?? (() => {});
         const telemetry = options.telemetry;
         /** @type {{goal: string, command: string, confidence: number | null, latencyMs: number, provider?: string, at: number} | null} */
@@ -739,16 +747,64 @@ export async function attachTacticalLoop(agent) {
         loadCurriculum(goals);
     }
 
-    const loop = new TacticalLoop(agent, provider, goals, createGameData(agent.bot.registry), {
+    const gameData = createGameData(agent.bot.registry);
+    /** @type {ReturnType<typeof createStrategist> | null} */
+    let strategist = null;
+    const log = (/** @type {{type: string, detail?: unknown}} */ event) =>
+        console.log(`[tactical:${agent.name}]`, event.type, event.detail === undefined ? '' : JSON.stringify(event.detail));
+    const telemetry = profile.telemetry === false ? undefined : createTelemetry(`./bots/${agent.name}/decisions.jsonl`, {
+        onError: error => console.warn(`[tactical:${agent.name}] telemetry write failed:`, error instanceof Error ? error.message : error),
+    });
+    const loop = new TacticalLoop(agent, provider, goals, gameData, {
         ...profile.tactical,
         guard: new LoopGuard(profile.guard ?? {}),
         statePath,
         goalsFingerprint,
-        telemetry: profile.telemetry === false ? undefined : createTelemetry(`./bots/${agent.name}/decisions.jsonl`, {
-            onError: error => console.warn(`[tactical:${agent.name}] telemetry write failed:`, error instanceof Error ? error.message : error),
-        }),
-        onEvent: event => console.log(`[tactical:${agent.name}]`, event.type, event.detail === undefined ? '' : JSON.stringify(event.detail)),
+        telemetry,
+        onEvent: event => {
+            log(event);
+            // a goal given up is a question for the strategist: what instead?
+            if (event.type === 'gave up' || (event.type === 'stuck' && /** @type {any} */ (event.detail)?.givenUp))
+                strategist?.consult({ kind: 'gave_up', detail: event.detail }, strategyContext());
+        },
+        onLowConfidence: ({ chosen, goal }) =>
+            strategist?.consult({ kind: 'low_confidence', detail: { goal, command: chosen.command, confidence: chosen.confidence } }, strategyContext()),
     });
+    const strategyContext = () => ({ snapshot: loop.rawSnapshot(), goals: loop.goals, currentGoal: loop.currentGoal || null, recent: loop.recent });
+    if (profile.strategy_model) {
+        // A strategist that cannot be set up (a typo in the model name, no key) must not take the tactical loop
+        // down with it: the bot carries on without one.
+        try {
+            // any chat model Mindcraft knows (src/models/), e.g. "gpt-5-mini" or {"api": "anthropic", "model": "..."}
+            const { createModel, selectAPI } = await import('../models/_model_map.js');
+            const { default: convoManager } = await import('../agent/conversation.js');
+            const spec = selectAPI(structuredClone(profile.strategy_model));
+            const model = createModel(spec);
+            const name = `${spec.api}:${spec.model ?? 'default'}`;
+            const tuning = /** @type {Record<string, any>} */ (profile.strategy ?? {});
+            strategist = createStrategist({
+                maxPerHour: tuning.maxPerHour, chatPerHour: tuning.chatPerHour, cooldownMs: tuning.cooldownMs,
+                maxGoals: tuning.maxGoals, maxRequestGoals: tuning.maxRequestGoals, timeoutMs: tuning.timeoutMs, apology: tuning.apology,
+                name, data: gameData, guard: loop.guard, telemetry, onEvent: loop.onEvent,
+                price: priceOf(name) ?? undefined,
+                complete: async (system, user) => ({ text: String(await model.sendRequest([{ role: 'user', content: user }], system) ?? '') }),
+                say: text => agent.bot.chat(text),
+            });
+            loop.strategist = strategist;
+            // Mindcraft's respondFunc (agent.js) hands natural-language chat here instead of to its own chat
+            // model; it has already dropped the bot's own lines, other bots and anyone outside only_chat_with.
+            loop.hearPlayer = (username, message) => {
+                const humans = Object.keys(agent.bot.players ?? {})
+                    .filter(p => p !== agent.name && !convoManager.isOtherAgent(p)).length;
+                if (!isAddressedTo(message, agent.name, humans)) return false;
+                strategist?.consult({ kind: 'chat', from: username, message }, strategyContext());
+                return true;
+            };
+        } catch (error) {
+            console.warn(`[tactical:${agent.name}] no strategist: ${error instanceof Error ? error.message : error}`);
+            strategist = null;
+        }
+    }
     // budgets and bans carry over even when the goals were rebuilt
     loop.restoreState(saved, { goalsRestored: Boolean(sameGoals) });
     // Mindcraft ends the agent through agent.cleanKill(reason) (a wedged action, a kick, a lost connection, a

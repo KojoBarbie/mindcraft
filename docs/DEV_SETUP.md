@@ -226,6 +226,41 @@ since the agent started.
 One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
 check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
 
+### Strategist (`strategist.js`)
+
+A large chat model, asked rarely and never waited for, that turns a player's request or a stalled run into typed
+goals. Set `strategy_model` to any model Mindcraft knows (`src/models/`):
+
+```json
+"strategy_model": "gpt-5-mini",
+"strategy": { "maxPerHour": 20, "cooldownMs": { "low_confidence": 120000, "gave_up": 60000 } }
+```
+
+It is consulted when a player talks to the bot, when a decision's confidence is below `tactical.lowConfidence`,
+and when a goal is given up. Player chat reaches it through Mindcraft's own `respondFunc` (agent.js), which has
+already dropped the bot's own lines, other bots and anyone outside `only_chat_with`; plain requests go to the
+strategist instead of the chat model (one answer per message), `!commands` still run as before. In open chat a
+message must name the bot unless it is alone with one player.
+
+One consultation at a time (a player's request waits for the running one; the bot's own are skipped), a 60 s
+timeout, per-kind cooldowns, and separate hourly allowances for players (`chatPerHour`, 30) and for the bot itself
+(`maxPerHour`, 20). Its tokens and USD are charged to the guard, and a spent guard budget stops it, but its calls
+do not count as tactical decisions, so a chatty player cannot pause the bot. A model with no known price
+(`DEFAULT_PRICES`) is reported once: the USD budget cannot see it.
+
+The answer (`{"reply", "goals"}`) is checked: known goal types, real item ids, a route the planner can find from
+where the bot stands, and nothing the bot has just given up (unless a player asks). A player's goals go ahead of
+the bot's own, first come first served (a goal already queued is moved up; at most `maxRequestGoals`, 10); the
+strategist's own go right after the goal being worked on. The reply is sanitised before it reaches chat (no
+leading `/` or `!`, no line breaks or `§` codes): mineflayer would send a line starting with `/` as a server
+command with the bot's permissions. An answer without JSON (Mindcraft's adapters answer errors with a sentence)
+counts as a failure and the player hears an apology. Every consultation is a `kind: "strategy"` line in the
+telemetry; its tokens are estimated from the text, so reasoning tokens are missing.
+
+Measured with gpt-5-mini (2026-09-21): 「鉄装備を揃えて」 became an iron pickaxe and the four iron armour pieces,
+「家を建てて」 a stone axe, 64 planks, 32 cobblestone, 8 glass and a door; 10-13 s and ~$0.0004 each. Building
+itself is not a goal type yet, so a house stops at its materials.
+
 ### Chat models as decision providers (`providers/openai.js`)
 
 Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions

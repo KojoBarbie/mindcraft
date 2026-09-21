@@ -180,6 +180,11 @@ export class Agent {
                 if (convoManager.isOtherAgent(username)) {
                     console.warn('received whisper from other bot??')
                 }
+                // mindcraft fork: with a strategist (src/decision/strategist.js) plain requests go to it, not to
+                // the chat model, so a message gets one answer; "!commands" still run here as before
+                else if (this.tactical?.hearPlayer && !containsCommand(message) && this.tactical.hearPlayer(username, message)) {
+                    return;
+                }
                 else {
                     let translation = await handleEnglishTranslation(message);
                     this.handleMessage(username, translation);

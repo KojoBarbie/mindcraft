@@ -16,9 +16,18 @@ export const DEFAULT_PRICES = {
     'openai:gpt-5-nano': [0.05, 0.40],
     'openai:gpt-5-mini': [0.25, 2.00],
     'openai:gpt-5': [1.25, 10.00],
+    'anthropic:claude-haiku-4-5': [1.00, 5.00],
     'rules': [0, 0],
     'mock': [0, 0],
 };
+
+/**
+ * @param {string} provider as reported, e.g. "openai:gpt-5-nano"
+ * @returns {[number, number] | null} USD per million tokens in/out
+ */
+export function priceOf(provider) {
+    return DEFAULT_PRICES[provider] ?? (provider.startsWith('ollama:') || provider.startsWith('mock') ? [0, 0] : null);
+}
 
 /**
  * @param {string} provider as reported, e.g. "openai:gpt-5-nano"
@@ -28,7 +37,7 @@ export const DEFAULT_PRICES = {
  * @returns {number | null} null when the price is unknown
  */
 export function estimateUsd(provider, usage, fallback = {}) {
-    const known = DEFAULT_PRICES[provider] ?? (provider.startsWith('ollama:') || provider.startsWith('mock') ? [0, 0] : undefined);
+    const known = priceOf(provider);
     const input = known?.[0] ?? fallback.inputUsdPerMillion;
     const output = known?.[1] ?? fallback.outputUsdPerMillion;
     if (input === undefined && output === undefined) return null;
