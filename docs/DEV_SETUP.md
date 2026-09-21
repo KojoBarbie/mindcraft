@@ -271,14 +271,18 @@ Found by running the bot for real; they affect any Mindcraft bot, not just this 
   exits the process if it is still stuck; `ActionManager.stop()` does the same for an action that will not stop
   (a pathfinder wedged on a cliff). Mindcraft then restarts the agent. The tactical loop therefore never
   interrupts a `mode:*` action, only commands it fired itself. The decision state survives a restart (see above).
-- **x/z became NaN (fixed).** From 1.21.2 `entity_velocity` and `spawn_entity` carry `velocity: {x, y, z}`;
-  mineflayer 4.33 read `velocityX/Y/Z`, so every knockback set a NaN velocity and the next physics step a NaN
-  position. That got the bot kicked ("Invalid move player packet received") and, worse, sent the pathfinder's
-  `GoalLookAtBlock` raycast into an endless loop: the agent froze at 100% CPU and ignored SIGINT.
-  `patches/mineflayer+4.33.0.patch` reads both formats; as a backstop it repairs a non-finite velocity, heading
-  or position before and after each physics step and refuses to send non-finite movement packets
-  (`bot.nanRecoveries` counts repairs; it should stay 0). `patches/mineflayer-pathfinder+2.4.5.patch` and
-  `patches/prismarine-world+3.7.0.patch` make the goal and the raycast give up on non-finite input.
+- **x/z became NaN (fixed).** `package.json` asks for minecraft-data `^3.97.0`, which resolves to 3.116; that
+  version describes `entity_velocity` and `spawn_entity` with `velocity: {x, y, z}`, where mineflayer 4.33 reads
+  `velocityX/Y/Z` (mineflayer 4.39 reads the new shape). Every knockback therefore set a NaN velocity and the
+  next physics step a NaN position. That got the bot kicked ("Invalid move player packet received") and, worse,
+  sent the pathfinder's `GoalLookAtBlock` raycast into an endless loop: the agent froze at 100% CPU and ignored
+  SIGINT. `patches/mineflayer+4.33.0.patch` reads both shapes (and warns once about a packet with neither),
+  reads the velocity of `spawn_entity` at all, and fixes `sync_entity_position` (velocity left undefined, angles
+  in degrees). As a backstop it repairs a non-finite velocity, heading or position before and after each physics
+  step and refuses to send non-finite movement packets (`bot.nanRecoveries` counts repairs; it should stay 0).
+  `patches/mineflayer-pathfinder+2.4.5.patch` and `patches/prismarine-world+3.7.0.patch` make the goal and the
+  raycast give up on non-finite input. `test/decision/patches.test.js` checks the packet shapes against
+  minecraft-data, so a future bump that changes them fails a test instead of a bot.
 - **allow-flight.** The dev server allows flight because tests edit terrain under bots. A customer server that
   does not may kick a bot left briefly standing on nothing.
 - **World wear.** Dozens of test runs dig up the spawn area and tests turn flaky. Reset with

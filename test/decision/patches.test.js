@@ -25,3 +25,16 @@ test('mineflayer-pathfinder: GoalLookAtBlock is never reached from a non-finite 
     const goal = new goals.GoalLookAtBlock(new Vec3(0, 64, 0), world);
     assert.equal(goal.isEnd(/** @type {any} */ (new Vec3(NaN, 64, NaN))), false);
 });
+
+test('minecraft-data describes 1.21.6 velocities as {x, y, z}; mineflayer reads that shape and the old one', () => {
+    const md = require('minecraft-data')('1.21.6');
+    const fields = (/** @type {string} */ name) => md.protocol.play.toClient.types[name][1].map((/** @type {any} */ f) => f.name);
+    // if this ever changes back, readNotchVelocity must follow
+    assert.ok(fields('packet_entity_velocity').includes('velocity'));
+    assert.ok(fields('packet_spawn_entity').includes('velocity'));
+
+    const { readNotchVelocity } = /** @type {any} */ (require('mineflayer/lib/plugins/entities.js'));
+    assert.deepEqual({ ...readNotchVelocity({ velocity: { x: 8000, y: -400, z: 0 } }) }, { x: 8000, y: -400, z: 0 });
+    assert.deepEqual({ ...readNotchVelocity({ velocityX: 1, velocityY: 2, velocityZ: 3 }) }, { x: 1, y: 2, z: 3 });
+    assert.deepEqual({ ...readNotchVelocity({ entityId: 1 }) }, { x: 0, y: 0, z: 0 }, 'unreadable: zero, never NaN');
+});
