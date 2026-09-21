@@ -13,6 +13,8 @@ const SENDER = 'harness_user';
  * @property {number} [mindserverPort]
  * @property {number} [spawnTimeoutMs]
  * @property {boolean} [verbose] forward the agent's stdout
+ * @property {Record<string, unknown>} [profile] extra profile fields, e.g. {decision_model: 'rules'} to run the
+ *   tactical loop (src/decision/tactical_loop.js) instead of a bare command runner
  */
 
 /**
@@ -46,7 +48,7 @@ export async function startHarness(options = {}) {
     const port = options.mindserverPort ?? 8099;
     const spawnTimeoutMs = options.spawnTimeoutMs ?? 60_000;
 
-    const child = fork(WORKER, [name, String(port)], {
+    const child = fork(WORKER, [name, String(port), JSON.stringify(options.profile ?? {})], {
         cwd: fileURLToPath(new URL('../../', import.meta.url)),
         stdio: ['ignore', options.verbose ? 'inherit' : 'ignore', 'inherit', 'ipc'],
     });

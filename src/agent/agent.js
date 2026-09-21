@@ -17,6 +17,7 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+import { attachTacticalLoop } from '../decision/tactical_loop.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -121,6 +122,17 @@ export class Agent {
               
                 this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
+
+                // Decision layer (src/decision): does nothing unless the profile sets "decision_model".
+                // Its own failure must not take the bot down with it — a typo in the profile would otherwise
+                // land in the handler below, which exits with code 0, and agent_process only restarts on
+                // non-zero. The bot then sits there for ever, silently doing nothing.
+                try {
+                    this.tactical = await attachTacticalLoop(this);
+                } catch (error) {
+                    console.error('Failed to start the decision layer; continuing without it:', error);
+                    this.tactical = null;
+                }
               
                 if (!load_mem) {
                     if (settings.task) {

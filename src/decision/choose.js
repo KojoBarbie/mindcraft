@@ -2,7 +2,7 @@
 // Hierarchical selection: action -> target -> quantity, one choice question per stage. Flat enumeration of
 // every (action, target, quantity) would run to hundreds of options; staged, each question stays small, and a
 // stage with a single option is not asked at all.
-import { buildCommand, listActions, listQuantities, listTargets, targetNotes } from './catalog.js';
+import { buildCommand, listActions, listQuantities, listTargets, maxQuantity, targetNotes } from './catalog.js';
 
 /** @typedef {import('./catalog.js').CatalogContext} CatalogContext */
 /** @typedef {import('./types.js').DecisionResult} DecisionResult */
@@ -23,7 +23,12 @@ import { buildCommand, listActions, listQuantities, listTargets, targetNotes } f
  * @param {{decide: (request: import('./types.js').DecisionRequest) => Promise<DecisionResult>}} provider
  * @param {CatalogContext} ctx
  * @param {unknown} state what the model sees, from compressState()
- * @param {{signal?: AbortSignal, only?: string[]}} [options] `only` restricts the first stage to these action ids
+ * @param {object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @param {string[]} [options.only] restrict the first stage to these action ids
+ * @param {Record<string, {target?: string, quantity?: number}>} [options.preset] for these actions the target and
+ *   quantity are already known (a planner worked them out), so those stages are not asked. A quantity over what
+ *   the catalog offers in one go is clamped rather than refused.
  * @returns {Promise<ChosenCommand>}
  */
 export async function chooseCommand(provider, ctx, state, options = {}) {
@@ -62,6 +67,18 @@ export async function chooseCommand(provider, ctx, state, options = {}) {
 
     const guide = actions.map(action => `${action.id}: ${action.hint}`).join('; ');
     const action = await ask('action', `Pick the single best next action for the bot, given its goal. Options: ${guide}`, actions.map(a => a.id));
+
+    const preset = options.preset?.[action];
+    if (preset) {
+        const quantities = listQuantities(ctx, action, preset.target);
+        const quantity = quantities.length > 0 ? Math.min(preset.quantity ?? quantities[0], maxQuantity(ctx, action, preset.target)) : undefined;
+        return {
+            command: buildCommand(ctx, { id: action, target: preset.target, quantity }),
+            action, target: preset.target, quantity,
+            confidence: decisions === 0 ? 1 : confidence,
+            decisions, latencyMs, inputTokens,
+        };
+    }
 
     const targets = listTargets(ctx, action);
     const notes = Object.entries(targetNotes(ctx, action, targets)).map(([name, note]) => `${name} ${note}`).join('; ');

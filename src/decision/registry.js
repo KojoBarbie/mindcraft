@@ -1,6 +1,7 @@
 // @ts-check
 import { DecisionError } from './errors.js';
 import { createMockProvider } from './providers/mock.js';
+import { createRulesProvider } from './providers/rules.js';
 import { resilient } from './resilient.js';
 
 /** @typedef {import('./types.js').DecisionProvider} DecisionProvider */
@@ -14,7 +15,10 @@ import { resilient } from './resilient.js';
 
 // A Map, not an object: a profile saying "constructor" must not resolve to Object.prototype.constructor.
 /** @type {Map<string, ProviderFactory>} */
-const factories = new Map([['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))]]);
+const factories = new Map([
+    ['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))],
+    ['rules', /** @type {ProviderFactory} */ (options => createRulesProvider(options))],
+]);
 
 /**
  * Make a provider available under a name. Registering a name twice is almost always a mistake (two modules

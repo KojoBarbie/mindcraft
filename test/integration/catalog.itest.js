@@ -33,13 +33,25 @@ before(async () => {
     harness = await startHarness({ name: 'catalog_bot', mindserverPort: 8098 });
     await rcon('time set day');
     for (const name of [PROBE, harness.name]) await rcon(`clear ${name}`);
-    // a stone pad with one log and one stone block on it, so the scene does not depend on the terrain
+    // A long-lived dev world is not a safe place to stand: other tests dig holes and a bot that has been
+    // logged in before comes back hungry. Patch the ground under this one and top it up before measuring.
     const at = `execute at ${PROBE} run`;
-    await rcon(`${at} fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone`);
-    await rcon(`${at} fill ~-3 ~ ~-3 ~3 ~3 ~3 minecraft:air`);
-    await rcon(`${at} setblock ~2 ~ ~0 minecraft:oak_log`);
-    await rcon(`${at} setblock ~-2 ~ ~0 minecraft:stone`);
-    await sleep(1500);
+    for (const name of [PROBE, harness.name]) {
+        await rcon(`effect give ${name} minecraft:saturation 5 20 true`);
+        await rcon(`effect give ${name} minecraft:instant_health 1 20 true`);
+    }
+    // rcon-cli exits 0 whatever happens, and the failure that actually bites is "That position is not
+    // loaded" — everything else ("No blocks were filled" when the pad is already right) is fine.
+    const build = async (/** @type {string} */ command) => {
+        const reply = await rcon(`${at} ${command}`);
+        assert.ok(!/not loaded|Unknown|Expected/i.test(reply), `${command} -> ${reply}`);
+        return reply;
+    };
+    await build('fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone');
+    await build('fill ~-3 ~ ~-3 ~3 ~3 ~3 minecraft:air');
+    await build('setblock ~2 ~ ~0 minecraft:oak_log');
+    await build('setblock ~-2 ~ ~0 minecraft:stone');
+    await sleep(2000);
 });
 
 after(async () => {
