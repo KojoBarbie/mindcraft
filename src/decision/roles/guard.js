@@ -32,6 +32,12 @@ export function createGuardRole(options = {}) {
 
     return {
         name: 'guard',
+        /** kept across agent restarts (decision_state.json): a restart far away must not move the post */
+        state: () => ({ post }),
+        /** @param {any} saved */
+        restore(saved) {
+            if (!options.center && saved?.post && [saved.post.x, saved.post.y, saved.post.z].every(Number.isFinite)) post = saved.post;
+        },
         /** the night routine (dig in and wait) is not for a guard */
         keepsWatchAtNight: true,
 
@@ -52,6 +58,10 @@ export function createGuardRole(options = {}) {
                 loop.onEvent({ type: 'role', detail: { role: 'guard', command: 'night report', kills: tally.kills } });
             }
             wasNight = night;
+
+            // evening or night and away from the post (gear-gathering took it far): go back first
+            const away = Math.hypot(snapshot.pos.x - post.x, snapshot.pos.z - post.z);
+            if (away > radius * 2 && (night || snapshot.timeOfDay >= 11_000)) return `!goToCoordinates(${post.x}, ${post.y}, ${post.z}, 3)`;
 
             // by day, get what the night needs; by night, make do with what there is
             if (!night) {

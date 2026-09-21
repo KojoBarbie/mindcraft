@@ -36,6 +36,12 @@ export function createMinerRole(options = {}) {
 
     return {
         name: 'miner',
+        state: () => ({ center, diamondsSeen }),
+        /** @param {any} saved */
+        restore(saved) {
+            if (!options.center && saved?.center && Number.isFinite(saved.center.x) && Number.isFinite(saved.center.z)) center = saved.center;
+            if (Number.isFinite(saved?.diamondsSeen)) diamondsSeen = saved.diamondsSeen;
+        },
 
         /**
          * What to do next, or null to let the loop pursue its goals (the role queues them when equipment is short).
