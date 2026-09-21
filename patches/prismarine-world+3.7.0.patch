@@ -1,0 +1,15 @@
+diff --git a/node_modules/prismarine-world/src/iterators.js b/node_modules/prismarine-world/src/iterators.js
+index e1db1f6..401a424 100644
+--- a/node_modules/prismarine-world/src/iterators.js
++++ b/node_modules/prismarine-world/src/iterators.js
+@@ -180,7 +180,9 @@ class RaycastIterator {
+   }
+ 
+   next () {
+-    if (Math.min(Math.min(this.tMaxX, this.tMaxY), this.tMaxZ) > this.maxDistance) { return null }
++    // mindcraft fork: with a NaN direction every comparison is false and this stepped for ever
++    const tMin = Math.min(Math.min(this.tMaxX, this.tMaxY), this.tMaxZ)
++    if (!(tMin <= this.maxDistance)) { return null }
+ 
+     if (this.tMaxX < this.tMaxY) {
+       if (this.tMaxX < this.tMaxZ) {
