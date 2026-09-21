@@ -8,6 +8,7 @@ const [name, port, profileJson] = process.argv.slice(2);
 /** @type {Record<string, unknown>} */
 const overrides = {
     mindserver_port: Number(port),
+    ...(process.env.MC_PORT ? { port: Number(process.env.MC_PORT) } : {}), // the Minecraft server; see docker-compose.dev.yml
     auto_open_ui: false,
     init_message: null,
     load_memory: false,

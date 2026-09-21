@@ -28,3 +28,31 @@ services:
       - ./dev/server-patches:/patches:ro
     stdin_open: true
     tty: true
+
+  # A second, identical server for experiments that must not disturb a long run on the first (a soak test sets
+  # nothing, but an experiment that sets the time or the weather would change what the soak measures).
+  # Start: MC_EULA=true docker compose -f docker-compose.dev.yml --profile lab up -d minecraft-lab
+  # Use:   MC_DEV_SERVICE=minecraft-lab MC_PORT=55917 npm run test:integration
+  minecraft-lab:
+    profiles: ["lab"]
+    image: itzg/minecraft-server:java21
+    environment:
+      EULA: "${MC_EULA:-false}"
+      TYPE: PAPER
+      VERSION: "1.21.6"
+      ONLINE_MODE: "false"
+      ALLOW_FLIGHT: "true"
+      MEMORY: 2G
+      DIFFICULTY: easy
+      SPAWN_PROTECTION: "0"
+      SEED: "mindcraft-dev"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: dev
+      PATCH_DEFINITIONS: /patches
+    ports:
+      - "127.0.0.1:55917:25565"
+    volumes:
+      - ./server_data_lab:/data
+      - ./dev/server-patches:/patches:ro
+    stdin_open: true
+    tty: true

@@ -226,6 +226,23 @@ since the agent started.
 One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
 check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
 
+### Nights (`nightRoutine` in `tactical_loop.js`, `skills.shelter`)
+
+Nights are handled by rule, before any model is asked: an unarmoured bot on the surface at night died 20 times
+in one night of a soak test, losing its inventory each time. From dusk (time of day 12,500) the loop stops the
+command it fired, then sleeps if a bed is in sight (`!goToBed`) or digs in (`!shelter`: centre on the block, dig
+three down, wall and roof whatever is open with dirt or stone; three so the roof sits below ground where the
+hole's sides hold it). Once boxed in it waits, calling no provider at all, until dawn (23,300), then climbs out
+with `!goToSurface`. Reflexes (self-defence) are never cut short. `"tactical": {"nightShelter": false}` turns it
+off. `test/integration/night.itest.js` sets zombies on it through a night.
+
+A second server for experiments like that one, which change the time, without disturbing a run on the first:
+
+```
+MC_EULA=true docker compose -f docker-compose.dev.yml --profile lab up -d minecraft-lab
+MC_DEV_SERVICE=minecraft-lab MC_PORT=55917 node --test test/integration/night.itest.js
+```
+
 ### Strategist (`strategist.js`)
 
 A large chat model, asked rarely and never waited for, that turns a player's request or a stalled run into typed

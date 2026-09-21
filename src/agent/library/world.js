@@ -429,3 +429,20 @@ export function getBiomeName(bot) {
     const biomeId = bot.world.getBiome(bot.entity.position);
     return mc.getAllBiomes()[biomeId].name;
 }
+
+// mindcraft fork: the spaces around a standing bot that must be solid for it to be safe from mobs: the four sides
+// at feet and head height, and the block above the head.
+export const ENCLOSURE_OFFSETS = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1], [0, 2, 0]];
+
+export function isEnclosed(bot) {
+    /**
+     * Is the bot boxed in: solid blocks on all four sides at feet and head height, and above its head?
+     * @param {MinecraftBot} bot
+     * @returns {boolean}
+     **/
+    const feet = bot.entity.position.floored();
+    return ENCLOSURE_OFFSETS.every(([dx, dy, dz]) => {
+        const block = bot.blockAt(feet.offset(dx, dy, dz));
+        return !!block && block.boundingBox === 'block';
+    });
+}

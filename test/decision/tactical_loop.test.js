@@ -595,3 +595,97 @@ test('crash blame: a command that was interrupted moments before a wedge kill is
     again.restoreState(loadJSON(statePath));
     assert.deepEqual(guard.bannedNow(), [agent.commands[0]]);
 });
+
+/** A provider that must not be asked anything. */
+const silent = { name: 'silent', decide: () => { throw new Error('the night routine must not call a provider'); } };
+
+/** @param {ReturnType<typeof fakeAgent>} agent @param {Partial<import('../../src/decision/tactical_loop.js').TacticalLoopOptions>} [options] */
+function nightLoop(agent, options = {}) {
+    agent.bot.time.timeOfDay = 14_000;
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    /** @type {{type: string, detail?: any}[]} */
+    const events = [];
+    const loop = new TacticalLoop(agent, resilient([silent], { retries: 0 }), queue, data, {
+        periodMs: 20, minGapMs: 0,
+        execute: command => { agent.commands.push(command); return Promise.resolve('ok'); },
+        onEvent: event => events.push(event),
+        ...options,
+    });
+    return { loop, events };
+}
+
+test('night: out in the open it digs in, by rule, without asking any model', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = nightLoop(agent);
+    loop.enclosed = () => false;
+    await loop.decide();
+    assert.deepEqual(agent.commands, ['!shelter()']);
+    assert.ok(events.some(e => e.type === 'night' && e.detail === 'digging in'));
+    assert.ok(!events.some(e => e.type === 'error'));
+});
+
+test('night: with a bed in sight it sleeps instead', async () => {
+    const agent = fakeAgent({ world: ['red_bed'] });
+    const { loop } = nightLoop(agent);
+    loop.enclosed = () => false;
+    await loop.decide();
+    assert.deepEqual(agent.commands, ['!goToBed()']);
+});
+
+test('night: once boxed in it waits, deciding nothing and calling nothing', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = nightLoop(agent);
+    loop.enclosed = () => true;
+    for (let i = 0; i < 5; i++) await loop.decide();
+    assert.deepEqual(agent.commands, []);
+    assert.equal(events.filter(e => e.type === 'sheltered').length, 1, 'said once, not every tick');
+});
+
+test('dusk: a command still running is stopped once; a night command is left to finish', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    let stops = 0;
+    agent.actions.stop = () => { stops++; return Promise.resolve(); };
+    const { loop, events } = nightLoop(agent);
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
+    await loop.decide();
+    await loop.decide();
+    assert.equal(stops, 1);
+    assert.ok(events.some(e => e.type === 'dusk'));
+    loop.pendingCommand = '!shelter()';
+    await loop.decide();
+    assert.equal(stops, 1);
+});
+
+test('dawn: it climbs out once, and then the day goes on as usual', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = nightLoop(agent);
+    loop.enclosed = () => true;
+    await loop.decide();
+    assert.equal(loop.sheltered, true);
+    agent.bot.time.timeOfDay = 23_500;
+    await loop.decide();
+    assert.deepEqual(agent.commands, ['!goToSurface()']);
+    assert.ok(events.some(e => e.type === 'dawn'));
+    assert.equal(loop.sheltered, false);
+});
+
+test('nightShelter: false leaves the night to the model', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    agent.bot.time.timeOfDay = 14_000;
+    const { loop } = loopFor(agent, { nightShelter: false });
+    await loop.decide();
+    assert.ok(agent.commands.length === 1 && !agent.commands[0].startsWith('!shelter'));
+});
+
+test('night: after digging in it says it is sheltered, even though it was marked sheltered when it began', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = nightLoop(agent);
+    let boxed = false;
+    loop.enclosed = () => boxed;
+    await loop.decide(); // fires !shelter
+    await tick(); await tick();
+    boxed = true;
+    await loop.decide();
+    assert.ok(events.some(e => e.type === 'sheltered'));
+});

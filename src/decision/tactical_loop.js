@@ -27,6 +27,11 @@ import { createStrategist, isAddressedTo } from './strategist.js';
  * Actions the bot may take at any time, whatever the plan says. The planner's own action is added to these,
  * so the model is choosing between "get on with the goal" and "deal with what is in front of me".
  */
+// Minecraft time: mobs spawn in the dark from about 12,500 and burn from about 23,500.
+const DUSK = 12_500;
+const DAWN = 23_300;
+const NIGHT_COMMANDS = ['!shelter', '!goToBed'];
+const ENCLOSURE = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1], [0, 2, 0]];
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
@@ -68,6 +73,8 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {string} [goalsFingerprint] what the profile asked for, saved alongside so a changed profile starts afresh
  * @property {number} [crashBanMs] how long to ban the command that was running when the agent last crashed
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
+ * @property {boolean} [nightShelter] at night, dig in (or use a bed) and wait for morning instead of deciding;
+ *   default true. Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
  * @property {(record: Record<string, unknown>) => void} [telemetry] receives every provider call and the loop's
  *   notable events (see telemetry.js); unset = nothing recorded
  */
@@ -148,6 +155,12 @@ export class TacticalLoop {
         this.goalsFingerprint = options.goalsFingerprint ?? '';
         this.crashBanMs = options.crashBanMs ?? 5 * 60_000;
         this.retryFailedAfterMs = options.retryFailedAfterMs ?? 30 * 60_000;
+        this.nightShelter = options.nightShelter ?? true;
+        /** dug in for the night: at dawn it climbs back out */
+        this.sheltered = false;
+        this.stoppingForNight = false;
+        this.shelterAnnounced = false;
+        this.nightBusyWith = '';
         this.restarts = 0;
         this.lastSavedAt = 0;
         /** @type {{cmd: string, at: number, endedAt: number | null} | null} the last command fired, for crash blame */
@@ -357,6 +370,9 @@ export class TacticalLoop {
             return;
         }
 
+        // The night is handled by rule, before anything costs money: see nightRoutine().
+        if (this.nightShelter && this.nightRoutine(epoch)) return;
+
         // Budgets apply to every provider call, the cheap interrupt question included.
         const paused = this.guard.overBudget();
         if (paused) {
@@ -461,6 +477,70 @@ export class TacticalLoop {
         // While a goal has no workable plan the bot is only casting about for the missing piece. Letting that
         // count as progress would reset the counter that eventually gives the goal up.
         this.run(chosen.command, queued.id, this.progressSignature(snapshot), epoch, plan.unresolved.length === 0);
+    }
+
+    /**
+     * Nights, by rule rather than by model: an unarmoured bot on the surface at night dies over and over (20
+     * deaths in one night in a soak test), losing everything each time. So from dusk the loop stops whatever it
+     * fired, sleeps if a bed is at hand or else digs in (!shelter), and then waits without calling any provider.
+     * At dawn it climbs back out. Reflexes (self-defence) are left alone throughout.
+     * @param {number} epoch
+     * @returns {boolean} true if the night routine took this tick
+     */
+    nightRoutine(epoch) {
+        const raw = this.rawSnapshot();
+        const night = raw.dimension === 'overworld' && raw.timeOfDay >= DUSK && raw.timeOfDay < DAWN;
+        if (!night) {
+            this.stoppingForNight = false;
+            this.shelterAnnounced = false;
+            if (!this.sheltered) return false;
+            if (this.pendingCommand || !this.agent.isIdle()) return true; // on its way out
+            this.sheltered = false;
+            this.onEvent({ type: 'dawn', detail: 'leaving the shelter' });
+            this.run('!goToSurface()', -1, this.progressSignature(raw), epoch, false);
+            return true;
+        }
+        if (this.pendingCommand) {
+            if (NIGHT_COMMANDS.some(c => this.pendingCommand.startsWith(c))) return true; // let it finish
+            if (!this.stoppingForNight) {
+                this.stoppingForNight = true;
+                this.onEvent({ type: 'dusk', detail: `stopping ${this.pendingCommand} for the night` });
+                this.interruptedCommand = this.pendingCommand;
+                void this.stopAction();
+            }
+            return true;
+        }
+        if (!this.agent.isIdle()) {
+            // a reflex is busy, e.g. fighting: not to be cut short
+            const label = this.agent.actions.currentActionLabel || 'something';
+            if (label !== this.nightBusyWith) this.onEvent({ type: 'night', detail: `waiting for ${label}` });
+            this.nightBusyWith = label;
+            return true;
+        }
+        this.nightBusyWith = '';
+        this.stoppingForNight = false;
+        if (this.enclosed()) {
+            if (!this.shelterAnnounced) this.onEvent({ type: 'sheltered', detail: 'waiting for morning' });
+            this.shelterAnnounced = true;
+            this.sheltered = true;
+            this.persist();
+            return true;
+        }
+        const snapshot = this.snapshotFor('get through the night');
+        const bed = snapshot.blocks.some(b => b.name.endsWith('_bed'));
+        this.onEvent({ type: 'night', detail: bed ? 'going to bed' : 'digging in' });
+        // a shelter half made (out of blocks, rock without a pickaxe) still counts: it is dawn that ends it
+        this.sheltered = !bed;
+        this.run(bed ? '!goToBed()' : '!shelter()', -1, this.progressSignature(snapshot), epoch, false);
+        return true;
+    }
+
+    /** Solid blocks on all four sides at feet and head height, and above the head. */
+    enclosed() {
+        const bot = this.agent.bot;
+        const feet = bot.entity?.position?.floored?.();
+        if (!feet || typeof bot.blockAt !== 'function') return false;
+        return ENCLOSURE.every(([dx, dy, dz]) => bot.blockAt(feet.offset(dx, dy, dz))?.boundingBox === 'block');
     }
 
     /**
@@ -635,6 +715,7 @@ export class TacticalLoop {
                 stuckSince: [...this.stuckSince],
                 restarts: this.restarts,
                 guardGoalId: this.guardGoalId,
+                sheltered: this.sheltered,
                 suspect: options.clean ? null : this.suspect(),
             },
         };
@@ -665,6 +746,7 @@ export class TacticalLoop {
                     .map((/** @type {[number, number]} */ [id, since]) => [id, since + age]));
         }
         this.restarts = Number.isInteger(loop.restarts) && loop.restarts >= 0 ? loop.restarts : 0;
+        this.sheltered = loop.sheltered === true; // so a restart at night still climbs out at dawn
         if (saved.clean !== true && saved.exit?.wedged === true && age <= (options.recentMs ?? 90_000)) {
             this.restarts++;
             const suspect = typeof loop.suspect === 'string' && loop.suspect ? loop.suspect : null;

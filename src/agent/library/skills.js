@@ -2091,3 +2091,68 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
+// mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall, so they are not here.
+const SHELTER_FILLERS = ['dirt', 'coarse_dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'andesite', 'diorite',
+    'granite', 'tuff', 'stone', 'deepslate', 'sandstone', 'oak_planks', 'spruce_planks', 'birch_planks', 'acacia_planks',
+    'jungle_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks'];
+
+export async function shelter(bot) {
+    /**
+     * Get safe for the night: dig straight down up to three blocks where it stands, then wall up and roof over
+     * whatever is still open around and above it. Stops short of lava, water and drops (see digDown).
+     * Three, not two: the roof then sits a block below the surface, where the sides of the hole give it
+     * something to be placed against; at ground level there is nothing beside it but air.
+     * @param {MinecraftBot} bot
+     * @returns {Promise<boolean>} true if the bot ends up boxed in
+     **/
+    if (world.isEnclosed(bot)) {
+        log(bot, 'Already sheltered.');
+        return true;
+    }
+    const ground = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
+    if (!ground || ground.boundingBox !== 'block') {
+        log(bot, `Not standing on solid ground (${ground ? ground.name : 'unloaded'} below ${bot.entity.position.floored()}, onGround ${bot.entity.onGround}); cannot make a shelter here.`);
+        return false;
+    }
+    // Stand in the middle of the block first. Off centre, the bot's hitbox still rests on the next block once
+    // the one below is dug out, so it never drops into the hole and walls up around empty air.
+    const cell = bot.entity.position.floored();
+    const centre = cell.offset(0.5, 0, 0.5);
+    for (let i = 0; i < 30; i++) {
+        const p = bot.entity.position;
+        if (Math.abs(p.x - centre.x) < 0.2 && Math.abs(p.z - centre.z) < 0.2) break;
+        await bot.lookAt(new Vec3(centre.x, p.y + bot.entity.height * 0.9, centre.z), true);
+        bot.setControlState('forward', true);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        bot.setControlState('forward', false);
+    }
+    bot.clearControlStates();
+    const startY = bot.entity.position.y;
+    // Digging is best effort: rock without a pickaxe, or water below, just means more blocks to place.
+    await digDown(bot, 3);
+    // Wait until it has landed at the bottom: on the ground, on something solid, for a few ticks running.
+    for (let i = 0, settled = 0; i < 60 && settled < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const below = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
+        settled = bot.entity.onGround && below && below.boundingBox === 'block' ? settled + 1 : 0;
+    }
+    await pickupNearbyItems(bot); // the dug blocks drop at the bot's feet; they are the walls
+
+    const feet = bot.entity.position.floored();
+    for (const [dx, dy, dz] of world.ENCLOSURE_OFFSETS) {
+        if (bot.interrupt_code) return false;
+        const spot = feet.offset(dx, dy, dz);
+        const block = bot.blockAt(spot);
+        if (block && block.boundingBox === 'block') continue;
+        const filler = SHELTER_FILLERS.find(name => bot.inventory.items().some(item => item.name === name));
+        if (!filler) {
+            log(bot, 'Ran out of blocks to close the shelter with.');
+            return false;
+        }
+        await placeBlock(bot, filler, spot.x, spot.y, spot.z, 'side', true);
+    }
+    const sheltered = world.isEnclosed(bot);
+    log(bot, sheltered ? 'Sheltered for the night.' : 'Could not close the shelter.');
+    return sheltered;
+}
