@@ -207,3 +207,10 @@ test('memory: a log type seen a moment ago beats the everyday oak; one searched 
     const coal = planGoal(haveItem('coal', 1), snapshot(), data, { absent: ['coal_ore', 'deepslate_coal_ore'] });
     assert.deepEqual(coal.unresolved, []);
 });
+
+test('food: an animal seen lately, else one not searched for in vain; never only cows', () => {
+    const hunted = (/** @type {any} */ plan) => plan.steps.find((/** @type {any} */ s) => s.kind === 'hunt')?.from;
+    assert.equal(hunted(planGoal(haveFood(4), snapshot(), data)), 'cow');
+    assert.equal(hunted(planGoal(haveFood(4), snapshot(), data, { absentEntities: ['cow'] })), 'pig');
+    assert.equal(hunted(planGoal(haveFood(4), snapshot(), data, { seenEntities: ['sheep'], absentEntities: ['cow'] })), 'sheep');
+});

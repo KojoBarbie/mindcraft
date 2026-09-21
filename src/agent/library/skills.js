@@ -453,6 +453,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     // Blocks to ignore safety for, usually next to lava/water
     const unsafeBlocks = ['obsidian'];
 
+    const approached = new Set(); // blocks walked up to after a NoPath: one retry each, not a loop
     for (let i=0; i<num; i++) {
         let blocks = world.getNearestReachableBlocks(bot, block => {
             if (!blocktypes.includes(block.name)) {
@@ -525,8 +526,18 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             else {
                 log(bot, `Failed to collect ${blockType}: ${err}.`);
-                // only "there is no way there": a timeout may be a slow search, a changed goal someone else's doing
-                if (/NoPath/.test(String(err)) && !bot.interrupt_code) markUnreachable(bot, block.position);
+                // only "there is no way there": a timeout may be a slow search, a changed goal someone else's doing.
+                // First try walking over with drops allowed (goToGoal falls back to them); a tree-top spawn
+                // has no safe path to any log at all.
+                if (/NoPath/.test(String(err)) && !bot.interrupt_code) {
+                    let near = false;
+                    try {
+                        near = deeperDropAllowed(bot) > 4 && await goToPosition(bot, block.position.x, block.position.y, block.position.z, 3);
+                    } catch { near = false; }
+                    const key = block.position.toString();
+                    if (near && !approached.has(key)) { approached.add(key); i--; continue; } // close now: collect it next pass
+                    markUnreachable(bot, block.position);
+                }
                 continue;
             }
         }
@@ -1093,6 +1104,10 @@ export async function goToGoal(bot, goal) {
     nonDestructiveMovements.digCost = 10;
 
     const destructiveMovements = new pf.Movements(bot);
+    // mindcraft fork: a path through blocks the bot cannot mine with what it holds (stone with bare hands) ends
+    // in "Pathfinding stopped: Cannot break stone with current tools", every time. Route around them instead.
+    for (const movements of [nonDestructiveMovements, destructiveMovements])
+        for (const id of unbreakableNow(bot)) movements.blocksCantBreak.add(id);
 
     let final_movements = destructiveMovements;
 
@@ -1117,9 +1132,43 @@ export async function goToGoal(bot, goal) {
         return true;
     } catch (err) {
         clearInterval(doorCheckInterval);
+        // mindcraft fork: stuck up high (players spawn on tree tops; a savanna has cliffs) the only way on is a
+        // drop deeper than the pathfinder's safe four blocks. With health to spare, take the fall damage.
+        const deeper = deeperDropAllowed(bot);
+        if (/NoPath/.test(String(err)) && deeper > 4 && !bot.interrupt_code) {
+            const falling = new pf.Movements(bot);
+            falling.maxDropDown = deeper;
+            log(bot, `No path; allowing drops of up to ${deeper} blocks (health ${Math.round(bot.health)}).`);
+            bot.pathfinder.setMovements(falling);
+            await bot.pathfinder.goto(goal);
+            return true;
+        }
         // we need to catch so we can clean up the door check interval, then rethrow the error
         throw err;
     }
+}
+
+// mindcraft fork: ids of blocks that need a tool the bot does not have (cached per inventory).
+let unbreakableCache = { key: '', ids: [] };
+export function unbreakableNow(bot) {
+    const held = bot.inventory.items().map(item => item.type);
+    const key = [...new Set(held)].sort().join(',');
+    if (unbreakableCache.key === key) return unbreakableCache.ids;
+    const ids = [];
+    for (const block of Object.values(bot.registry.blocks)) {
+        const tools = block.harvestTools ? Object.keys(block.harvestTools).map(Number) : null;
+        if (tools && !tools.some(id => held.includes(id))) ids.push(block.id);
+    }
+    unbreakableCache = { key, ids };
+    return ids;
+}
+
+// mindcraft fork: how far the bot may drop and keep at least 6 health. Fall damage is one point per block
+// beyond three; capped at 12 blocks.
+export function deeperDropAllowed(bot) {
+    const health = Number(bot.health);
+    if (!Number.isFinite(health)) return 4;
+    return Math.max(4, Math.min(12, Math.floor(health) - 6 + 3));
 }
 
 let _doorInterval = null;
@@ -1404,6 +1453,38 @@ export async function followPlayer(bot, username, distance=4) {
     return true;
 }
 
+
+export async function explore(bot, distance = 32) {
+    /**
+     * mindcraft fork: walk somewhere new, keeping a heading between calls so that exploring goes somewhere.
+     * moveAway picks any direction each time, and a bot looking for animals walked back and forth between the
+     * same two spots. A blocked heading turns a quarter to the left and tries again.
+     * @param {MinecraftBot} bot
+     * @param {number} distance how far to go this time
+     * @returns {Promise<boolean>} true if it got somewhere
+     **/
+    bot.exploreHeading ??= Math.random() * 2 * Math.PI;
+    const start = bot.entity.position.clone();
+    for (let turn = 0; turn < 4; turn++) {
+        if (bot.interrupt_code) return false;
+        const heading = bot.exploreHeading;
+        const x = Math.round(start.x + Math.cos(heading) * distance);
+        const z = Math.round(start.z + Math.sin(heading) * distance);
+        try {
+            await goToGoal(bot, new pf.goals.GoalNearXZ(x, z, 4));
+        } catch (err) {
+            if (!/NoPath|Timeout/i.test(String(err))) throw err;
+        }
+        const moved = bot.entity.position.distanceTo(start);
+        if (moved >= distance / 2) {
+            log(bot, `Explored ${Math.round(moved)} blocks towards ${x}, ${z}; now at ${bot.entity.position.floored()}.`);
+            return true;
+        }
+        bot.exploreHeading = heading + Math.PI / 2;
+    }
+    log(bot, `Could not explore from ${start.floored()}: every direction is blocked.`);
+    return false;
+}
 
 export async function moveAway(bot, distance) {
     /**
@@ -2110,6 +2191,27 @@ export async function useToolOn(bot, toolName, targetName) {
     return true;
  }
 
+// mindcraft fork: ground a shelter can be dug into by hand.
+// Sand and gravel dig by hand too, and the shaft's sides hold (they only fall straight down); the roof is placed
+// from the inventory, never of them.
+const SOFT_GROUND = ['grass_block', 'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay', 'moss_block',
+    'sand', 'red_sand', 'gravel', 'snow_block'];
+
+/** Can the three blocks under these feet be dug with what the bot has (or are they already air)? */
+function canDigShaft(bot, feet) {
+    const tools = bot.inventory.items().map(item => item.type);
+    for (let dy = 1; dy <= 3; dy++) {
+        const block = bot.blockAt(feet.offset(0, -dy, 0));
+        if (!block) return false;
+        if (block.boundingBox === 'empty') continue;
+        if (block.name === 'lava' || block.name === 'water' || block.name === 'bedrock') return false;
+        if (!block.canHarvest(null) && !tools.some(id => block.canHarvest(id))) return false;
+    }
+    // and something to land on: digDown stops at a drop, and a cave under the hole means no shelter
+    const floor = bot.blockAt(feet.offset(0, -4, 0));
+    return !!floor && floor.boundingBox === 'block';
+}
+
 // mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall (a roof of them lands
 // on the bot's head); planks are left alone because the first goals need them for tools.
 const SHELTER_FILLERS = ['dirt', 'coarse_dirt', 'rooted_dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'andesite',
@@ -2128,6 +2230,21 @@ export async function shelter(bot) {
     if (world.isEnclosed(bot)) {
         log(bot, 'Already sheltered.');
         return true;
+    }
+    // Three blocks down must be diggable with what the bot holds: on bare rock without a pickaxe, walk to
+    // softer ground first (a night test failed three times on stone and died five times).
+    if (!canDigShaft(bot, bot.entity.position.floored())) {
+        const soft = world.getNearestBlocksWhere(bot, b => !!b?.position && SOFT_GROUND.includes(b.name)
+            && canDigShaft(bot, b.position.offset(0, 1, 0)) && !isUnreachable(bot, b.position), 48, 1)[0];
+        if (!soft) {
+            log(bot, 'The ground here is too hard to dig with what I have, and there is no soft ground nearby.');
+            return false;
+        }
+        log(bot, `The ground here is too hard to dig; going to ${soft.name} at ${soft.position}.`);
+        if (!await goToPosition(bot, soft.position.x, soft.position.y + 1, soft.position.z, 0)) {
+            markUnreachable(bot, soft.position);
+            return false;
+        }
     }
     const ground = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
     if (!ground || ground.boundingBox !== 'block') {

@@ -99,7 +99,7 @@ export class LoopGuard {
         this.repeatLimit = options.repeatLimit ?? 3;
         this.repeatWindowMs = options.repeatWindowMs ?? 60_000;
         this.banForMs = options.banForMs ?? 120_000;
-        this.repeatExempt = options.repeatExempt ?? ['!stay', '!attack', '!moveAway(24)'];
+        this.repeatExempt = options.repeatExempt ?? ['!stay', '!attack', '!moveAway(24)', '!explore'];
         this.cellSize = options.cellSize ?? 8;
         this.now = options.now ?? Date.now;
         this.inputUsdPerMillion = options.inputUsdPerMillion ?? 0;

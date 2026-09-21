@@ -63,6 +63,9 @@ async function main() {
         profile: { decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini' },
     });
     await rcon(`clear ${name}`);
+    // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
+    // began inside the previous night's shelter).
+    if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
     /** @type {any} */
     let latest = null;
     const feed = io(`http://localhost:${port}`);

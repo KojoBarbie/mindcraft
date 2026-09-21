@@ -4,10 +4,11 @@
 
 /**
  * Minecraft time of day (0-23,999). Hostile mobs start spawning on the surface at about 13,000 in clear
- * weather; the loop starts preparing a little earlier. The sun is up again from about 23,000 and undead start
+ * weather; the loop starts preparing a full minute earlier, which leaves time to walk to soft ground and to
+ * try again if the first hole fails. The sun is up again from about 23,000 and undead start
  * to burn soon after; the loop leaves its shelter at 23,300.
  */
-export const NIGHT_START = 12_500;
+export const NIGHT_START = 12_000;
 export const NIGHT_END = 23_300;
 
 /** @param {number} timeOfDay */
@@ -35,6 +36,10 @@ export function isEnclosedAt(blockAt, feet) {
  * @param {{offset: (x: number, y: number, z: number) => any}} feet
  */
 export function hasCover(blockAt, feet, range = 24) {
-    for (let dy = 2; dy <= range; dy++) if (blockAt(feet.offset(0, dy, 0))?.boundingBox === 'block') return true;
+    for (let dy = 2; dy <= range; dy++) {
+        const block = /** @type {{boundingBox?: string, name?: string} | null | undefined} */ (blockAt(feet.offset(0, dy, 0)));
+        // a tree is not a roof: under its leaves the bot stood in the open and was stopped and restarted all dusk
+        if (block?.boundingBox === 'block' && !/leaves|_log$|_wood$|_stem$|mushroom_block|vine/.test(block.name ?? '')) return true;
+    }
     return false;
 }

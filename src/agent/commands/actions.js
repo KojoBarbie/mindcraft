@@ -158,6 +158,14 @@ export const actionsList = [
         })
     },
     {
+        name: '!explore',
+        description: 'Walk to somewhere new, keeping the same direction from one call to the next, to find things that are not nearby.',
+        params: {'distance': { type: 'float', description: 'How far to walk this time.', domain: [8, 256] }},
+        perform: runAsAction(async (agent, distance) => {
+            await skills.explore(agent.bot, distance);
+        })
+    },
+    {
         name: '!rememberHere',
         description: 'Save the current location with a given name.',
         params: {'name': { type: 'string', description: 'The name to remember the location as.' }},

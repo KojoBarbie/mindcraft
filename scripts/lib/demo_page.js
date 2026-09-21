@@ -46,7 +46,7 @@ export async function packSheets(framesDir, count, out) {
 const VERBS = /** @type {Record<string, string>} */ ({
     collectBlocks: '集める', craftRecipe: '作る', smeltItem: '精錬する', searchForBlock: '探しに行く',
     searchForEntity: '探しに行く', moveAway: '歩いて探索する', attack: '倒す', consume: '食べる', equip: '装備する',
-    shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
+    explore: '歩いて探索する', shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
     goToBed: 'ベッドで寝る', takeFromChest: 'チェストから取る', putInChest: 'チェストにしまう', givePlayer: '渡す',
     goToPlayer: 'プレイヤーの所へ行く', followPlayer: 'ついて行く', clearFurnace: 'かまどから取り出す', discard: '捨てる',
 });
@@ -57,7 +57,7 @@ export function describeCommand(command) {
     if (!m) return command ?? '';
     const verb = VERBS[m[1]] ?? m[1];
     const parts = m[2].split(',').map(p => p.trim().replace(/^"|"$/g, '')).filter(Boolean);
-    if (m[1] === 'moveAway' || m[1] === 'stay') return verb;
+    if (m[1] === 'moveAway' || m[1] === 'stay' || m[1] === 'explore') return verb;
     const [what, n] = parts;
     return what ? `${what}${n ? ` ×${n}` : ''} を${verb}` : verb;
 }
@@ -270,7 +270,7 @@ function draw() {
   const hud = document.getElementById('hud'); hud.textContent = '';
   const add = t => { const s = document.createElement('span'); s.textContent = t; hud.appendChild(s); };
   if (f.h != null) add('体力 ' + f.h + '/20'); if (f.f != null) add('空腹 ' + f.f + '/20');
-  if (f.n != null) add(f.n >= 12500 && f.n < 23300 ? '夜' : '昼');
+  if (f.n != null) add(f.n >= 12000 && f.n < 23300 ? '夜' : '昼');
   document.getElementById('goal').textContent = f.g || '（目標なし）';
   document.getElementById('inv').textContent = f.inv.length ? f.inv.map(([n, c]) => n + ' ×' + c).join('、') : '（空）';
   clock.textContent = fmt(f.t) + ' / ' + fmt(last);

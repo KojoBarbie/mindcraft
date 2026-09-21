@@ -205,7 +205,7 @@ export const ACTIONS = [
         id: 'explore',
         hint: 'walk somewhere new when nothing useful is nearby',
         quantities: () => [32, 96],
-        build: (_target, n) => `!moveAway(${n})`,
+        build: (_target, n) => `!explore(${n})`,
     },
     {
         id: 'wait',
