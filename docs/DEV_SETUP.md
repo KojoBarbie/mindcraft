@@ -185,3 +185,37 @@ each that is ~$0.73/day on Jev; a $1/day cap would cut a busy bot off late in th
 ```
 
 `goals` replaces the default survival curriculum with an explicit list, in priority order.
+### Chat models as decision providers (`providers/openai.js`)
+
+Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions
+become a strict JSON schema, so a choice can only be one of the offered options.
+
+```json
+"decision_model": "openai"                                             // gpt-5-nano, OPENAI_API_KEY
+"decision_model": { "provider": "openai", "model": "gpt-5-mini" }
+"decision_model": { "provider": "ollama", "model": "qwen3:4b" }        // local, no key
+"decision_model": ["jev", "openai", "rules"]                           // fallback order
+```
+
+Two things measured the hard way: gpt-5 models default to `reasoning_effort: "minimal"` here, because at the
+API's default effort a two-word answer takes ~1300 reasoning tokens and ~10 s; and `max_completion_tokens`
+counts reasoning, so a small cap returns an empty answer. The confidence a chat model reports is its own
+estimate (gpt-5-nano says ~0.65 about answers it gets right every time), not a calibrated probability.
+
+`node scripts/try_provider.js <spec> [runs]` asks a real provider a real question and prints latency and tokens.
+
+### Known problems underneath the decision layer (Mindcraft / mineflayer on 1.21.6)
+
+Found by running the bot for real; they affect any Mindcraft bot, not just this fork.
+
+- **Reflex modes kill the process.** `unstuck` (src/agent/modes.js) arms a 10 s timer while freeing the bot and
+  exits the process if it is still stuck; `ActionManager.stop()` does the same for an action that will not stop
+  (a pathfinder wedged on a cliff). Mindcraft then restarts the agent. The tactical loop therefore never
+  interrupts a `mode:*` action, only commands it fired itself. A restart still loses in-memory state (#11).
+- **x/z become NaN.** Occasionally the bot's position turns NaN on two axes while y and velocity are fine;
+  the next movement packet gets it kicked ("Invalid move player packet received"). `patches/mineflayer+4.33.0.patch`
+  refuses to send non-finite movement packets and restores only the broken axes. The source is not found yet.
+- **allow-flight.** The dev server allows flight because tests edit terrain under bots. A customer server that
+  does not may kick a bot left briefly standing on nothing.
+- **World wear.** Dozens of test runs dig up the spawn area and tests turn flaky. Reset with
+  `npm run dev:server:down && rm -rf server_data_dev && MC_EULA=true npm run dev:server`.

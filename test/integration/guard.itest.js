@@ -1,11 +1,13 @@
 // @ts-check
 // An impossible goal must not trap the bot. Give it one it cannot reach (a nether star, in the overworld, with
-// empty hands) followed by one it can, and check that it gives the first up and gets on with the second.
+// empty hands) followed by one it can (dirt: there wherever it stands, no tool needed), and check that it gives
+// the first up and gets on with the second.
 // Needs the dev server: MC_EULA=true npm run dev:server. Run with: npm run test:integration
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
+import { countOf, inventoryOf } from '../../scripts/lib/poll.js';
 
 const BOT = 'guard_bot';
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -24,7 +26,7 @@ before(async () => {
             decision_model: 'rules',
             goals: [
                 { type: 'have_item', item: 'nether_star', count: 1 },
-                { type: 'have_item', item: 'oak_log', count: 2 },
+                { type: 'have_item', item: 'dirt', count: 2 },
             ],
             // short fuses so the test does not take all afternoon; the defaults are minutes
             tactical: { periodMs: 1000, stuckGoalMs: 4000 },
@@ -32,9 +34,19 @@ before(async () => {
         },
     });
     await rcon(`clear ${BOT}`);
+    // Flat ground all round. On the dev world's plateau, exploring (!moveAway) can wedge the pathfinder on a
+    // cliff; Mindcraft's unstuck mode then kills the agent after 10 s, and the restart wipes the goal queue, so
+    // the nether star would never be given up. That is real (see #11), but it is not what this test is about.
+    const at = `execute at ${BOT} run`;
+    await rcon(`${at} forceload add ~-48 ~-48 ~48 ~48`);
+    for (const [x0, x1] of [[-40, -1], [0, 40]]) {
+        await rcon(`${at} fill ~${x0} ~-1 ~-40 ~${x1} ~-1 ~40 minecraft:grass_block`);
+        await rcon(`${at} fill ~${x0} ~ ~-40 ~${x1} ~4 ~40 minecraft:air`);
+    }
 });
 
 after(async () => {
+    await rcon(`execute at ${BOT} run forceload remove ~-48 ~-48 ~48 ~48`).catch(() => {});
     await rcon('difficulty easy').catch(() => {});
     await rcon(`clear ${BOT}`).catch(() => {});
     await harness?.stop();
@@ -42,12 +54,12 @@ after(async () => {
 
 test('an unreachable goal is given up, and the bot moves on to the next one', { timeout: 300_000 }, async () => {
     const deadline = Date.now() + 240_000;
-    let inventory = '';
+    /** @type {string | null} */
+    let inventory = null;
     while (Date.now() < deadline) {
         await sleep(8_000);
-        inventory = await harness.send('!inventory', { timeoutMs: 30_000 });
-        const logs = Number(/oak_log: (\d+)/.exec(inventory)?.[1] ?? 0);
-        if (logs >= 2) return;
+        inventory = (await inventoryOf(harness)) ?? inventory;
+        if (countOf(inventory, 'dirt') >= 2) return;
     }
-    assert.fail(`still no oak_log after 4 minutes, so it never let go of the nether star. Inventory: ${inventory}`);
+    assert.fail(`still no dirt after 4 minutes, so it never let go of the nether star. Inventory: ${inventory}`);
 });

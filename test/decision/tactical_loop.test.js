@@ -132,6 +132,7 @@ test('while an action is running the loop only asks whether to stop', async () =
     agent.actions.executing = true;
     agent.actions.currentActionLabel = 'action:collectBlocks';
     const { loop, events } = loopFor(agent, { settleMs: 0 });
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
     await loop.decide();
     assert.deepEqual(agent.commands, []);
     assert.equal(events.some(event => event.type === 'interrupt'), false);
@@ -143,11 +144,52 @@ test('while an action is running the loop only asks whether to stop', async () =
     assert.equal(agent.actions.executing, false);
 });
 
+test('reflex modes are never interrupted, only commands this loop fired', async () => {
+    // Mindcraft's unstuck mode kills the whole process if it is stopped while the bot is still stuck
+    const agent = fakeAgent({ world: ['oak_log'], hp: 3, mobs: ['zombie'] }); // an emergency, if it were asked
+    agent.actions.executing = true;
+    agent.actions.currentActionLabel = 'mode:unstuck';
+    let asked = 0;
+    const provider = { decide: (/** @type {any} */ request) => { asked++; return resilient([createRulesProvider()]).decide(request); } };
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    const loop = new TacticalLoop(agent, provider, queue, data, { settleMs: 0 });
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)'; // even with a command of ours pending underneath
+    loop.commandStartedAt = Date.now() - 60_000;
+    await loop.decide();
+    assert.equal(asked, 0);
+    assert.equal(agent.actions.executing, true);
+
+    // the same emergency during our own command is a different story
+    agent.actions.currentActionLabel = 'action:collectBlocks';
+    await loop.decide();
+    assert.equal(asked, 1);
+    assert.equal(agent.actions.executing, false);
+});
+
+test('the interrupt question carries the goal and asks about emergencies only', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    agent.actions.executing = true;
+    agent.actions.currentActionLabel = 'action:collectBlocks';
+    /** @type {any[]} */
+    const requests = [];
+    const provider = { decide: (/** @type {any} */ request) => { requests.push(request); return resilient([createRulesProvider()]).decide(request); } };
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    const loop = new TacticalLoop(agent, provider, queue, data, { settleMs: 0 });
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
+    await loop.decide();
+    assert.equal(requests[0].state.goal, 'have wooden_pickaxe or better');
+    assert.match(requests[0].questions[0].prompt, /emergency/);
+    assert.match(requests[0].questions[0].prompt, /safe to carry on/);
+});
+
 test('hunger alone never aborts an action: there may be nothing to eat', async () => {
     const agent = fakeAgent({ world: ['oak_log'], food: 3 });
     agent.actions.executing = true;
     agent.actions.currentActionLabel = 'action:collectBlocks';
     const { loop, events } = loopFor(agent, { settleMs: 0 });
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
     await loop.decide();
     assert.equal(events.some(event => event.type === 'interrupt'), false);
     assert.equal(agent.actions.executing, true);
@@ -160,6 +202,7 @@ test('a freshly started action is left alone, and an interrupted one is not houn
     await tick();
     agent.actions.executing = true; // the action manager picks it up
     agent.actions.currentActionLabel = 'action:flee';
+    loop.pendingCommand = '!moveAway(24)'; // and it is still ours, running
     await loop.decide();            // within settleMs of starting: not questioned
     assert.equal(events.some(event => event.type === 'interrupt'), false);
 
@@ -167,6 +210,7 @@ test('a freshly started action is left alone, and an interrupted one is not houn
     await loop.decide();
     assert.equal(events.filter(event => event.type === 'interrupt').length, 1);
     agent.actions.executing = true;
+    loop.pendingCommand = '!moveAway(24)';
     await loop.decide();            // still in danger, but it just interrupted: leave it be
     assert.equal(events.filter(event => event.type === 'interrupt').length, 1);
 });
@@ -384,6 +428,7 @@ test('stopping the action manager cannot hang the loop', async () => {
     agent.actions.currentActionLabel = 'action:collectBlocks';
     agent.actions.stop = () => new Promise(() => {}); // ActionManager spins until the code yields
     const { loop } = loopFor(agent, { settleMs: 0 });
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
     const started = Date.now();
     await loop.decide();
     assert.ok(Date.now() - started < 8000, 'decide() waited on a stop that never finished');

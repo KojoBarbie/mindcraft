@@ -9,6 +9,9 @@ services:
       TYPE: PAPER
       VERSION: "1.21.6" # version recommended by the README
       ONLINE_MODE: "false"
+      # Tests edit terrain around bots with RCON; a bot briefly left standing on nothing trips Paper's flight
+      # check and gets kicked. A real server may not allow this: see docs/DEV_SETUP.md.
+      ALLOW_FLIGHT: "true"
       MEMORY: 2G
       DIFFICULTY: easy
       SPAWN_PROTECTION: "0"

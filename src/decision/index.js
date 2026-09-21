@@ -4,6 +4,7 @@ export { validateQuestions, validateAnswers } from './validate.js';
 export { resilient } from './resilient.js';
 export { createMockProvider, seededRandom } from './providers/mock.js';
 export { createRulesProvider } from './providers/rules.js';
+export { createOpenAIProvider } from './providers/openai.js';
 export { createDecisionProvider, createDecisionProviderFromProfile, registerDecisionProvider } from './registry.js';
 export { takeSnapshot } from './snapshot.js';
 export { compressState } from './state.js';
