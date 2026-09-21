@@ -104,6 +104,8 @@ export class LoopGuard {
         this.now = options.now ?? Date.now;
         this.inputUsdPerMillion = options.inputUsdPerMillion ?? 0;
         this.outputUsdPerMillion = options.outputUsdPerMillion ?? 0;
+        /** whether a price was configured at all, as opposed to defaulting to free */
+        this.priced = options.inputUsdPerMillion !== undefined || options.outputUsdPerMillion !== undefined;
         this.limits = {
             decisions: { hour: options.maxDecisionsPerHour ?? 0, day: options.maxDecisionsPerDay ?? 0 },
             tokens: { hour: options.maxTokensPerHour ?? 0, day: options.maxTokensPerDay ?? 0 },
@@ -347,21 +349,26 @@ export class LoopGuard {
  * included, which a caller counting only successful answers would miss.
  * @template {{decide: (request: any) => Promise<any>}} P
  * @param {P} provider
+ * @param {(call: {request: any, result?: any, error?: unknown, latencyMs: number}) => void} [onCall] told of every call,
+ *   answered or not (telemetry)
  * @param {LoopGuard} guard
  * @returns {P}
  */
-export function metered(provider, guard) {
+export function metered(provider, guard, onCall) {
     return /** @type {P} */ ({
         ...provider,
         async decide(/** @type {any} */ request) {
+            const started = Date.now();
             try {
                 const result = await provider.decide(request);
                 guard.recordSpend({ decisions: result.attempts ?? 1, inputTokens: result.inputTokens ?? 0, outputTokens: result.outputTokens ?? 0 });
+                onCall?.({ request, result, latencyMs: result.latencyMs ?? Date.now() - started });
                 return result;
             } catch (error) {
                 // the request went out (and may be billed) even though no answer came back
                 const attempts = /** @type {any} */ (error)?.attempts;
                 guard.recordSpend({ decisions: typeof attempts === 'number' ? attempts : 1 });
+                onCall?.({ request, error, latencyMs: Date.now() - started });
                 throw error;
             }
         },

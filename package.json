@@ -52,6 +52,7 @@
         "test": "node --test \"test/**/*.test.js\"",
         "lint": "eslint --no-error-on-unmatched-pattern src/decision test scripts",
         "typecheck": "tsc -p tsconfig.json",
+        "stats": "node scripts/stats.js",
         "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.itest.js\""
     },
     "devDependencies": {

@@ -20,3 +20,4 @@ export { SURVIVAL_CURRICULUM, loadCurriculum } from './curriculum.js';
 export { TacticalLoop, attachTacticalLoop, exitInfo } from './tactical_loop.js';
 export { LoopGuard } from './guard.js';
 export { STATE_VERSION, saveJSON, loadJSON, fingerprint } from './persistence.js';
+export { createTelemetry, estimateUsd, describeCall, DEFAULT_PRICES } from './telemetry.js';

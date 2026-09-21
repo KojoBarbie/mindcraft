@@ -101,7 +101,9 @@ export function getFullState(agent) {
         },
         modes: {
             summary: bot.modes.getMiniDocs()
-        }
+        },
+        // the decision layer (src/decision/), when the profile runs one
+        tactical: agent.tactical ? agent.tactical.status() : null
     };
 
     return state;
