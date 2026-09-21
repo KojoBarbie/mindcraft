@@ -188,19 +188,21 @@ each that is ~$0.73/day on Jev; a $1/day cap would cut a busy bot off late in th
 
 ### Surviving a restart (`persistence.js`)
 
-The loop saves its state to `bots/<name>/decision_state.json` (every couple of seconds, before each command it
+The loop saves its state to `bots/<name>/decision_state.json` (at most every 10 s, before each command it
 fires, and on exit; written aside and renamed, so never half-written): the goal queue with its failures, the
 guard's spend windows, bans and per-goal progress, and the recent actions. A restarted agent picks it up:
 
-| Saved | On the next start |
+| How the agent ended | On the next start |
 |---|---|
-| on SIGINT (Mindcraft stopping the agent) | `clean: true`: carry on, nothing else |
-| within 90 s, not clean (Mindcraft killed a wedged action) | a crash: `restarts` + 1, and the command that was running is banned for 5 min |
-| longer ago | carry on |
+| SIGINT (Mindcraft stopping the agent) | carry on |
+| `cleanKill` for a wedge (`Got stuck…`, `…refused stop…`, `Infinite action loop…`), under 90 s ago | a crash: `restarts` + 1, and the command running then (or ended in the 20 s before) is banned for 5 min |
+| anything else (kick, lost connection, restart from the UI, or a wedge long ago) | carry on |
 
-Budgets and bans always carry over. The goal queue carries over only while the profile's `goals`/`curriculum`
-are unchanged (a fingerprint is saved alongside); edit them and the queue is rebuilt. Delete the file to start
-afresh.
+Budgets and bans always carry over. The goal queue, the guard's per-goal progress and the stuck timers (minus
+the time spent down) carry over only while the profile's `goals`/`curriculum` are unchanged (a fingerprint is
+saved alongside); edit them and the queue is rebuilt. A goal given up is tried again after
+`tactical.retryFailedAfterMs` (30 min). Spend is kept one entry per minute, so the file stays small; delete it
+to start afresh.
 
 ### Chat models as decision providers (`providers/openai.js`)
 

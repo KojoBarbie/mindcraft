@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import mcdata from 'minecraft-data';
 import {
-    GoalQueue, LoopGuard, TacticalLoop, createGameData, createRulesProvider, fingerprint, haveItem, haveTool, loadJSON, resilient, saveJSON,
+    GoalQueue, LoopGuard, TacticalLoop, exitInfo, createGameData, createRulesProvider, fingerprint, haveItem, haveTool, loadJSON, resilient, saveJSON,
 } from '../../src/decision/index.js';
 
 const data = createGameData(mcdata('1.21.6'));
@@ -76,18 +76,18 @@ test('a round trip keeps goals (failed ones included), spend, bans and the recen
     assert.equal(events.at(-1)?.type, 'restored');
 });
 
-test('saved moments before the start means a crash: the command that was running is banned, restarts counted', () => {
+test('killed for a wedged action moments ago: the command that was running is banned, restarts counted', () => {
     const path = join(dir(), 'state.json');
     const { loop } = loopWith({ statePath: path });
     loop.pendingCommand = '!goToPlayer("cliff", 1)';
-    loop.persist(true);
+    loop.persist(true, { exit: exitInfo('Code execution refused stop after 10 seconds. Killing process.') });
 
     const guard = new LoopGuard();
     const { loop: again, events } = loopWith({ guard });
     again.restoreState(loadJSON(path));
     assert.equal(again.restarts, 1);
     assert.ok(guard.bannedNow().includes('!goToPlayer("cliff", 1)'));
-    assert.equal(events.at(-1)?.type, 'restored after restart');
+    assert.equal(events.at(-1)?.type, 'restored after crash');
 });
 
 test('spend older than a day is dropped; spend within the hour still counts against the hourly budget', () => {
@@ -130,4 +130,72 @@ test('a clean shutdown is not a crash: nothing is banned and no restart is count
     again.restoreState(loadJSON(path));
     assert.equal(again.restarts, 0);
     assert.deepEqual(guard.bannedNow(), []);
+});
+
+test('exitInfo: only Mindcraft\'s wedge messages count as a crash', () => {
+    for (const reason of ["Got stuck and couldn't get unstuck", 'Code execution refused stop after 10 seconds. Killing process.', 'Infinite action loop detected, shutting down.'])
+        assert.equal(exitInfo(reason).wedged, true, reason);
+    for (const reason of ['Killing agent process...', 'Disconnected from MindServer. Killing agent process.', 'kicked: Invalid move player packet received', 'Safely restarting to update inventory.'])
+        assert.equal(exitInfo(reason).wedged, false, reason);
+});
+
+test('a kick or a restart from the UI is a resume, not a crash: nothing banned', () => {
+    const path = join(dir(), 'state.json');
+    const { loop } = loopWith({ statePath: path });
+    loop.pendingCommand = '!collectBlocks("dirt", 2)';
+    loop.persist(true, { exit: exitInfo('Disconnected from MindServer. Killing agent process.') });
+    const guard = new LoopGuard();
+    const { loop: again, events } = loopWith({ guard });
+    again.restoreState(loadJSON(path));
+    assert.equal(again.restarts, 0);
+    assert.deepEqual(guard.bannedNow(), []);
+    assert.equal(events.at(-1)?.detail.exit, 'Disconnected from MindServer. Killing agent process.');
+});
+
+test('the guard keeps its per-goal progress across a restart; stuck timers do not count the downtime', () => {
+    const path = join(dir(), 'state.json');
+    const { loop } = loopWith({ statePath: path });
+    loop.guardGoalId = 7;
+    loop.stuckSince.set(7, Date.now() - 1000);
+    loop.persist(true);
+    const saved = loadJSON(path);
+    saved.savedAt -= 60_000; // down for a minute
+
+    const { loop: same } = loopWith();
+    same.restoreState(saved);
+    assert.equal(same.guardGoalId, 7);
+    const since = /** @type {number} */ (same.stuckSince.get(7));
+    assert.ok(Date.now() - since < 5_000, 'the minute spent down was not counted as being stuck');
+
+    const { loop: rebuilt } = loopWith();
+    rebuilt.restoreState(saved, { goalsRestored: false });
+    assert.equal(rebuilt.guardGoalId, null);
+    assert.equal(rebuilt.stuckSince.size, 0, 'ids of a rebuilt queue point at other goals');
+});
+
+test('spend is saved one entry per minute, not one per call', () => {
+    let clock = 1_000_000;
+    const guard = new LoopGuard({ now: () => clock });
+    for (let i = 0; i < 100; i++) {
+        guard.recordSpend({ decisions: 1, inputTokens: 400 });
+        clock += 500;
+    }
+    const saved = guard.toJSON();
+    assert.equal(saved.spent.decisions.length, 1);
+    assert.equal(saved.spent.decisions[0].amount, 100);
+    assert.equal(guard.usage().tokens.hour, 40_000);
+});
+
+test('a goal given up is tried again after a while, with a clean record', () => {
+    const goals = new GoalQueue();
+    const id = goals.add(haveItem('bread', 1));
+    goals.giveUp(id);
+    assert.equal(goals.reviveFailed(Date.now() + 60_000, 30 * 60_000), 0);
+    assert.equal(goals.reviveFailed(Date.now() + 31 * 60_000, 30 * 60_000), 1);
+    assert.equal(goals.toJSON().goals[0].status, 'pending');
+    assert.equal(goals.toJSON().goals[0].failures, 0);
+
+    // saved before failedAt existed: waits a full cooldown from the load
+    const old = GoalQueue.fromJSON({ goals: [{ id: 1, goal: { type: 'have_item', item: 'bread', count: 1 }, status: 'failed', failures: 3 }] });
+    assert.equal(old.reviveFailed(Date.now() + 60_000, 30 * 60_000), 0);
 });

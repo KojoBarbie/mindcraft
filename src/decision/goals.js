@@ -76,6 +76,7 @@ export function describeGoal(goal) {
  * @property {number | null} parent id of the goal this one serves
  * @property {'pending' | 'done' | 'failed'} status
  * @property {number} failures
+ * @property {number} [failedAt] when it was given up, so it can be tried again later
  */
 
 /** What the agent is working towards, in order. Plain data throughout, so it can be saved and restored. */
@@ -127,6 +128,7 @@ export class GoalQueue {
         queued.failures++;
         if (queued.failures < this.maxFailures) return false;
         queued.status = 'failed';
+        queued.failedAt = Date.now();
         return true;
     }
 
@@ -140,7 +142,28 @@ export class GoalQueue {
         const queued = this.goals.find(g => g.id === id);
         if (!queued || queued.status !== 'pending') return false;
         queued.status = 'failed';
+        queued.failedAt = Date.now();
         return true;
+    }
+
+    /**
+     * Put goals given up at least `afterMs` ago back in the queue with a clean record. What made a goal
+     * impossible is often temporary (night, a mob, a bad spot), and a goal once failed would otherwise stay
+     * failed for as long as the saved state lives.
+     * @param {number} now
+     * @param {number} afterMs
+     * @returns {number} how many came back
+     */
+    reviveFailed(now, afterMs) {
+        let revived = 0;
+        for (const queued of this.goals) {
+            if (queued.status !== 'failed' || now - (queued.failedAt ?? now) < afterMs) continue;
+            queued.status = 'pending';
+            queued.failures = 0;
+            delete queued.failedAt;
+            revived++;
+        }
+        return revived;
     }
 
     /** Progress resets the failure count: three failures in a row give up, not three over a whole session. @param {number} id */
@@ -186,6 +209,8 @@ export class GoalQueue {
                 priority: Number.isFinite(g.priority) ? Number(g.priority) : 0,
                 parent: Number.isInteger(g.parent) ? /** @type {number} */ (g.parent) : null,
                 failures: Number.isInteger(g.failures) && Number(g.failures) >= 0 ? Number(g.failures) : 0,
+                // a failed goal saved before failedAt existed waits a full cooldown from now
+                ...(status === 'failed' ? { failedAt: Number.isFinite(g.failedAt) ? Number(g.failedAt) : Date.now() } : {}),
             });
         }
         for (const queued of queue.goals) {

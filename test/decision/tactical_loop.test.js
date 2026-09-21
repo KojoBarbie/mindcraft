@@ -575,3 +575,23 @@ test('a provider that throws does not kill the loop', async () => {
     await loop.stop();
     assert.ok(events.filter(event => event.type === 'error').length >= 2); // kept ticking
 });
+
+test('crash blame: a command that was interrupted moments before a wedge kill is the one banned', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { exitInfo, loadJSON } = await import('../../src/decision/index.js');
+    const statePath = join(mkdtempSync(join(tmpdir(), 'loop-')), 'state.json');
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop } = loopFor(agent, { statePath });
+    await loop.decide();
+    await tick(); await tick();
+    assert.equal(loop.pendingCommand, '', 'the command has come back, as it does when unstuck interrupts it');
+    // ...and then unstuck gives up and Mindcraft kills the process
+    loop.persist(true, { exit: exitInfo("Got stuck and couldn't get unstuck") });
+
+    const guard = new LoopGuard();
+    const { loop: again } = loopFor(fakeAgent(), { guard });
+    again.restoreState(loadJSON(statePath));
+    assert.deepEqual(guard.bannedNow(), [agent.commands[0]]);
+});

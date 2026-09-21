@@ -69,7 +69,11 @@ class Window {
     /** @param {number} at @param {number} amount */
     add(at, amount) {
         if (!(amount > 0)) return;
-        this.entries.push({ at, amount });
+        // One entry per minute: a day of per-call entries runs to megabytes once saved (#11). The entry keeps
+        // its first stamp, so an amount leaves the window up to a minute late, never early.
+        const last = this.entries.at(-1);
+        if (last && at >= last.at && at - last.at < 60_000) last.amount += amount;
+        else this.entries.push({ at, amount });
         this.sum += amount;
     }
 
