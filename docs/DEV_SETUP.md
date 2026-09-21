@@ -323,6 +323,22 @@ fixed overhead, and the tactical loop's action question runs to ~450-550 tokens 
 Confidence is meaningful: when the bot kept failing to craft, Jev's confidence in repeating it fell from 1.0
 to 0.5. TypeSafe is in early access and sometimes answers `system_overloaded`; that is retried.
 
+### Benchmark (`scripts/bench.js`, #17)
+
+Compares configurations on fixed scenarios (`bench/scenarios.json`) on the lab server, restoring its world
+before every trial: (a) upstream Mindcraft with gpt-5-mini self-prompting, (b) tactical loop + Jev, (c) + a
+gpt-5-mini strategist given the task in chat, (d) tactical loop + gpt-5-nano.
+
+```
+MC_EULA=true docker compose -f docker-compose.dev.yml --profile lab up -d minecraft-lab
+node scripts/bench.js --make-pristine        # once: a freshly generated world to restore from
+node scripts/bench.js [--configs a,b,c,d] [--scenarios wooden_pickaxe,food] [--trials 1]
+```
+
+Reports go to `docs/reports/bench-*.md|json`. **Internal only**: TypeSafe's terms (MCA §2.3(f)) restrict
+publishing benchmark results for Jev. Chat model cost comes from `MINDCRAFT_USAGE_LOG`, which `src/models/gpt.js`
+appends to when set (reasoning tokens included). Run from a git worktree with `MC_LAB_ROOT=<main checkout>`.
+
 ### Known problems underneath the decision layer (Mindcraft / mineflayer on 1.21.6)
 
 Found by running the bot for real; they affect any Mindcraft bot, not just this fork.
