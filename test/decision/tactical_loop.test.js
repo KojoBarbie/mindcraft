@@ -300,6 +300,119 @@ test('start/stop: ticks run on a timer and on events, and stop leaves no timers 
     assert.equal(agent.bot.listenerCount('idle'), 0);
 });
 
+test('a success is not read as a failure just because the reply mentions "not found"', async () => {
+    // skills.goToPosition says this on its way to succeeding; three of them used to bury a goal for good
+    const agent = fakeAgent({ world: [], inventory: { stone_pickaxe: 1, crafting_table: 1, stick: 2, coal: 1, furnace: 1 } });
+    const { loop, queue, events } = loopFor(agent, {
+        execute: command => {
+            agent.commands.push(command);
+            agent.bot.entity.position = vec(40.5, 64, 0.5); // it walked somewhere: that is the progress
+            return Promise.resolve('Action output:\nPath not found, but attempting to navigate anyway.\nFound iron_ore.');
+        },
+    }, [haveItem('iron_ingot')]);
+    await loop.decide();
+    await tick();
+    assert.equal(events.at(-1)?.detail.ok, true);
+    assert.equal(queue.goals[0].failures, 0);
+    assert.equal(loop.recent.at(-1)?.ok, true);
+});
+
+test('a real failure is still a failure, and the reason reaches the model', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, queue } = loopFor(agent, { execute: () => Promise.resolve('Failed to collect oak_log: no path.') });
+    await loop.decide();
+    await tick();
+    assert.equal(queue.goals[0].failures, 1);
+    assert.deepEqual(loop.recent.at(-1), { cmd: '!collectBlocks("oak_log", 3)', ok: false, note: 'Failed to collect oak_log: no path.' });
+});
+
+test('an action this loop cut short counts neither way', async () => {
+    const agent = fakeAgent({ world: ['oak_log'], hp: 4, mobs: ['zombie'] });
+    const { loop, queue } = loopFor(agent, { settleMs: 0, execute: () => Promise.resolve('') });
+    await loop.decide();                    // fires a command
+    await tick();
+    const after = queue.goals[0].failures;
+    agent.actions.executing = true;
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
+    loop.commandStartedAt = Date.now() - 10_000;
+    await loop.decide();                    // danger: interrupts it
+    loop.record('!collectBlocks("oak_log", 3)', '', queue.goals[0].id, { inventory: {}, pos: agent.bot.entity.position, hp: 4, food: 20 });
+    assert.equal(queue.goals[0].failures, after); // not counted against the goal...
+    assert.equal(loop.recent.at(-1)?.ok, true);   // ...and not shown to the model as a failure either
+});
+
+test('a goal with no workable plan is given up on eventually, not wandered at for ever', async () => {
+    const agent = fakeAgent({ world: [] });
+    const { loop, queue, events } = loopFor(agent, { stuckGoalMs: 50 }, [haveItem('nether_star')]);
+    await loop.decide();
+    await tick();
+    assert.equal(queue.goals[0].failures, 0); // the first look is free: the missing thing may turn up
+    assert.ok(events.some(event => event.type === 'unresolved'));
+    await wait(60);
+    await loop.decide();
+    assert.equal(queue.goals[0].failures, 1);
+    assert.ok(events.some(event => event.type === 'stuck'));
+});
+
+test('a command that never returns does not wedge the loop for ever', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    let stopped = 0;
+    const { loop, events } = loopFor(agent, {
+        commandTimeoutMs: 40,
+        execute: command => { agent.commands.push(command); return new Promise(() => {}); },
+    });
+    agent.actions.stop = () => { stopped++; return Promise.resolve(); };
+    loop.start();
+    await wait(200);
+    await loop.stop();
+    assert.ok(events.some(event => event.type === 'command timeout'));
+    assert.ok(stopped >= 1);
+    assert.ok(agent.commands.length >= 2, 'the loop went on to decide again');
+});
+
+test('stopping the action manager cannot hang the loop', async () => {
+    const agent = fakeAgent({ world: ['oak_log'], hp: 4, mobs: ['zombie'] });
+    agent.actions.executing = true;
+    agent.actions.currentActionLabel = 'action:collectBlocks';
+    agent.actions.stop = () => new Promise(() => {}); // ActionManager spins until the code yields
+    const { loop } = loopFor(agent, { settleMs: 0 });
+    const started = Date.now();
+    await loop.decide();
+    assert.ok(Date.now() - started < 8000, 'decide() waited on a stop that never finished');
+});
+
+test('nothing is decided while the bot is dead', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop } = loopFor(agent, { periodMs: 100_000 });
+    loop.start();
+    agent.bot.emit('death');
+    await loop.decide();
+    assert.deepEqual(agent.commands, []);
+
+    agent.bot.emit('respawn');
+    await loop.decide();
+    await tick();
+    assert.ok(agent.commands.length >= 1);
+    await loop.stop();
+    assert.equal(agent.bot.listenerCount('death'), 0);
+    assert.equal(agent.bot.listenerCount('idle'), 0);
+});
+
+test('a command that lands after the loop was stopped is not recorded against the goal', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    let finish = (/** @type {string} */ _output) => {};
+    const { loop, queue } = loopFor(agent, {
+        execute: command => new Promise(resolve => { agent.commands.push(command); finish = resolve; }),
+    });
+    loop.start();
+    await loop.decide();
+    await loop.stop();
+    finish('Failed to collect oak_log: no path.');
+    await tick();
+    assert.equal(queue.goals[0].failures, 0);
+    assert.deepEqual(loop.recent, []);
+});
+
 test('a provider that throws does not kill the loop', async () => {
     const agent = fakeAgent({ world: ['oak_log'] });
     const broken = { decide: () => Promise.reject(new Error('boom')) };

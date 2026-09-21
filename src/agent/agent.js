@@ -124,7 +124,15 @@ export class Agent {
                 this.startEvents();
 
                 // Decision layer (src/decision): does nothing unless the profile sets "decision_model".
-                this.tactical = await attachTacticalLoop(this);
+                // Its own failure must not take the bot down with it — a typo in the profile would otherwise
+                // land in the handler below, which exits with code 0, and agent_process only restarts on
+                // non-zero. The bot then sits there for ever, silently doing nothing.
+                try {
+                    this.tactical = await attachTacticalLoop(this);
+                } catch (error) {
+                    console.error('Failed to start the decision layer; continuing without it:', error);
+                    this.tactical = null;
+                }
               
                 if (!load_mem) {
                     if (settings.task) {

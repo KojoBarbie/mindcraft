@@ -40,10 +40,17 @@ before(async () => {
         await rcon(`effect give ${name} minecraft:saturation 5 20 true`);
         await rcon(`effect give ${name} minecraft:instant_health 1 20 true`);
     }
-    assert.match(await rcon(`${at} fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone`), /Successfully filled/);
-    await rcon(`${at} fill ~-3 ~ ~-3 ~3 ~3 ~3 minecraft:air`);
-    assert.match(await rcon(`${at} setblock ~2 ~ ~0 minecraft:oak_log`), /Changed the block/);
-    assert.match(await rcon(`${at} setblock ~-2 ~ ~0 minecraft:stone`), /Changed the block/);
+    // rcon-cli exits 0 whatever happens, and the failure that actually bites is "That position is not
+    // loaded" — everything else ("No blocks were filled" when the pad is already right) is fine.
+    const build = async (/** @type {string} */ command) => {
+        const reply = await rcon(`${at} ${command}`);
+        assert.ok(!/not loaded|Unknown|Expected/i.test(reply), `${command} -> ${reply}`);
+        return reply;
+    };
+    await build('fill ~-3 ~-1 ~-3 ~3 ~-1 ~3 minecraft:smooth_stone');
+    await build('fill ~-3 ~ ~-3 ~3 ~3 ~3 minecraft:air');
+    await build('setblock ~2 ~ ~0 minecraft:oak_log');
+    await build('setblock ~-2 ~ ~0 minecraft:stone');
     await sleep(2000);
 });
 

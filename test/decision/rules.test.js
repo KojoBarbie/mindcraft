@@ -23,6 +23,8 @@ test('it follows the plan when nothing is wrong', async () => {
 test('danger comes first: fight while healthy, run when not', async () => {
     const choices = action(['collect_blocks', 'attack', 'flee', 'eat', 'wait']);
     const near = { zombie: { n: 1, d: 4 } };
+    // a creeper at arm's length is an emergency at full health too, not only once the bar is low
+    assert.equal((await ask({ hp: 20, mobs: near, plan_action: 'collect_blocks' }, [choices])).action.value, 'attack');
     assert.equal((await ask({ hp: 12, mobs: near, plan_action: 'collect_blocks' }, [choices])).action.value, 'attack');
     assert.equal((await ask({ hp: 5, mobs: near, plan_action: 'collect_blocks' }, [choices])).action.value, 'flee');
     // a mob across the field is not a reason to stop working
@@ -45,8 +47,10 @@ test('with no plan it keeps busy rather than standing still', async () => {
 test('it only interrupts what the bot is doing when something is actually wrong', async () => {
     const calm = await ask({ hp: 20, food: 20 }, [interrupt]);
     assert.equal(calm.stop.value, false);
-    const hurt = await ask({ hp: 4, food: 20, mobs: { creeper: { n: 1, d: 3 } } }, [interrupt]);
-    assert.equal(hurt.stop.value, true);
+    const cornered = await ask({ hp: 20, food: 20, mobs: { creeper: { n: 1, d: 3 } } }, [interrupt]);
+    assert.equal(cornered.stop.value, true);
+    const hungry = await ask({ hp: 20, food: 2 }, [interrupt]);
+    assert.equal(hungry.stop.value, false); // there may be nothing to eat; the loop handles it when idle
 });
 
 test('unusable state does not throw; score questions get the middle of the range', async () => {

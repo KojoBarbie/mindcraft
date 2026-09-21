@@ -21,7 +21,7 @@ import { DecisionError } from '../errors.js';
 /**
  * @typedef {object} RulesOptions
  * @property {number} [fleeBelowHp] flee when health is at or under this and a hostile mob is close
- * @property {number} [fightBelowHp] fight back above that, if a hostile is right there
+ * @property {number} [fightBelowHp] at or under this, being near a hostile counts as hurt (used by callers)
  * @property {number} [eatBelowFood]
  * @property {number} [threatRange] blocks
  */
@@ -46,12 +46,15 @@ export function createRulesProvider(options = {}) {
 
     /**
      * @param {RuleState} s
-     * @returns {{danger: boolean, starving: boolean}}
+     * @returns {{danger: boolean, hurt: boolean, starving: boolean}}
      */
     function assess(s) {
         const closest = Math.min(Infinity, ...Object.values(s.mobs ?? {}).map(mob => mob.d));
         return {
-            danger: closest <= threatRange && (s.hp ?? 20) <= fightBelowHp,
+            // A hostile mob within reach is the emergency, whatever the health bar says; health decides
+            // whether the answer is to fight it or to run from it.
+            danger: closest <= threatRange,
+            hurt: (s.hp ?? 20) <= fightBelowHp,
             starving: (s.food ?? 20) <= eatBelowFood,
         };
     }
