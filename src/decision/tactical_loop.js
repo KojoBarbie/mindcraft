@@ -31,7 +31,7 @@ import { createStrategist, isAddressedTo } from './strategist.js';
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
-const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs'];
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };
@@ -74,7 +74,7 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
  * @property {boolean} [nightShelter] at night, dig in and wait for morning instead of deciding; default true.
  *   Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
- * @property {{name: string, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null}} [role]
+ * @property {{name: string, keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null}} [role]
  *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
  *   loop pursue its goals as usual
  * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)
@@ -410,7 +410,7 @@ export class TacticalLoop {
         }
 
         // The night is handled by rule, before anything costs money: see nightRoutine().
-        if (this.nightShelter && this.nightRoutine(epoch)) return;
+        if (this.nightShelter && !this.role?.keepsWatchAtNight && this.nightRoutine(epoch)) return;
 
         // Budgets apply to every provider call, the cheap interrupt question included.
         const paused = this.guard.overBudget();
@@ -1027,6 +1027,9 @@ export async function attachTacticalLoop(agent) {
     if (profile.role?.type === 'miner') {
         const { createMinerRole } = await import('./roles/miner.js');
         role = createMinerRole({ center: profile.role.center, radius: profile.role.radius, mineY: profile.role.mineY, say: text => agent.bot.chat(text) });
+    } else if (profile.role?.type === 'guard') {
+        const [{ createGuardRole }, { takeGuardReport }] = await Promise.all([import('./roles/guard.js'), import('../agent/library/guard.js')]);
+        role = createGuardRole({ center: profile.role.center, radius: profile.role.radius, say: text => agent.bot.chat(text), report: () => takeGuardReport(agent.bot) });
     } else if (profile.role?.type === 'lumberjack') {
         const { createLumberjackRole } = await import('./roles/lumberjack.js');
         role = createLumberjackRole({ center: profile.role.center, radius: profile.role.radius, quota: profile.role.quota, chest: profile.role.chest, say: text => agent.bot.chat(text) });

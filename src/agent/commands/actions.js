@@ -1,6 +1,7 @@
 import * as skills from '../library/skills.js';
 import * as mining from '../library/mining.js';
 import * as forestry from '../library/forestry.js';
+import * as guard from '../library/guard.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 
@@ -177,6 +178,19 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, x, z, radius) => {
             await mining.branchMine(agent.bot, { x, z }, radius);
+        })
+    },
+    {
+        name: '!patrol',
+        description: 'Guard the area around a post for a moment: fight a hostile mob inside it, retreat and eat when hurt, light a dark spot, or walk on along the round.',
+        params: {
+            'center_x': { type: 'float', description: 'x of the post.', domain: [-30000000, 30000000] },
+            'center_y': { type: 'float', description: 'y of the post.', domain: [-64, 320] },
+            'center_z': { type: 'float', description: 'z of the post.', domain: [-30000000, 30000000] },
+            'radius': { type: 'int', description: 'How far from the post to guard.', domain: [4, 128] },
+        },
+        perform: runAsAction(async (agent, x, y, z, radius) => {
+            await guard.patrol(agent.bot, { x, y, z }, radius);
         })
     },
     {
