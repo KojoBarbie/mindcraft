@@ -138,9 +138,14 @@ export function isHuntable(mob) {
     return animals.includes(mob.name.toLowerCase()) && !mob.metadata[16]; // metadata 16 is not baby
 }
 
+// mindcraft fork: mobs that leave the bot alone unless it strikes (or, for an enderman, stares at) them. The
+// self-defence reflex treated them as enemies and picked the fight: a guard in iron died to endermen twice in one
+// night. Not hostile, then.
+const NEUTRAL_MOBS = ['enderman', 'zombified_piglin', 'piglin', 'bee', 'wolf', 'polar_bear', 'llama', 'trader_llama', 'panda', 'dolphin', 'goat'];
+
 export function isHostile(mob) {
     if (!mob || !mob.name) return false;
-    return  (mob.type === 'mob' || mob.type === 'hostile') && mob.name !== 'iron_golem' && mob.name !== 'snow_golem';
+    return  (mob.type === 'mob' || mob.type === 'hostile') && mob.name !== 'iron_golem' && mob.name !== 'snow_golem' && !NEUTRAL_MOBS.includes(mob.name);
 }
 
 // blocks that don't work with collectBlock, need to be manually collected
