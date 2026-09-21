@@ -6,9 +6,10 @@
 //   node scripts/soak.js --minutes 120 --model jev > soak.log 2>&1
 //
 // Options: --minutes N (120), --model SPEC (jev; also a JSON list such as '["jev","rules"]'), --name BOT (soak_bot),
-// --port N (8097), --out DIR (docs/reports), --usd-per-day N (1), --difficulty D (easy), --keep (keep old state).
+// --port N (8097), --out DIR (docs/reports), --usd-per-day N (1), --difficulty D (easy), --keep (keep old state), --lab (use the lab server).
 // The bot is watched through the MindServer's state feed and its own telemetry, never by sending it commands:
-// a command would interrupt whatever it is doing and change what is being measured.
+// a command would interrupt whatever it is doing and change what is being measured. It sets the server's
+// difficulty for the whole run, so give it a server of its own (--lab or the main one with nothing else on it).
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,6 +24,10 @@ const opt = (name, fallback) => {
     const i = args.indexOf(`--${name}`);
     return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback;
 };
+if (args.includes('--lab')) { // the second dev server (docker-compose.dev.yml, profile "lab")
+    process.env.MC_DEV_SERVICE = 'minecraft-lab';
+    process.env.MC_PORT = '55917';
+}
 const minutes = Number(opt('minutes', '120'));
 const modelArg = opt('model', 'jev');
 const model = modelArg.startsWith('[') || modelArg.startsWith('{') ? JSON.parse(modelArg) : modelArg;
@@ -75,9 +80,25 @@ async function main() {
         name, mindserverPort: port, verbose: true, spawnTimeoutMs: 120_000,
         profile: {
             decision_model: model,
-            guard: { maxUsdPerDay: usdPerDay, inputUsdPerMillion: 0.042, outputUsdPerMillion: 0.40 },
+            // the budget is in USD; prices come from telemetry.js's table for the provider actually answering
+            guard: { maxUsdPerDay: usdPerDay, inputUsdPerMillion: 0.042, outputUsdPerMillion: 0 },
         },
     });
+
+    // Stopped early (Ctrl+C, kill): take the MindServer and the bot down too, and still write the report.
+    let stopping = false;
+    const stopEarly = async () => {
+        if (stopping) return;
+        stopping = true;
+        console.log('[soak] stopping early');
+        feed.close();
+        await harness.stop().catch(() => {});
+        await rcon('difficulty easy').catch(() => {});
+        writeReport({ startedAt, samples, bestStage, finalState: latest });
+        process.exit(130);
+    };
+    process.once('SIGINT', stopEarly);
+    process.once('SIGTERM', stopEarly);
 
     /** @type {any} */
     let latest = null;
@@ -147,7 +168,7 @@ function writeReport({ startedAt, samples, bestStage, finalState }) {
         `# Soak ${stamp}: ${JSON.stringify(model)}, ${minutes} min`,
         '',
         `- Best stage reached: **${bestStage}** (final goal: ${finalState?.tactical?.goal ?? '-'})`,
-        `- Deaths ${s.deaths}, crash restarts ${s.crashes}, other restarts ${Object.entries(exits).filter(([r]) => !/stuck|refused stop|infinite/i.test(r)).reduce((a, [, n]) => a + n, 0)}, budget pauses ${count(e => e.type === 'paused')}, goals given up ${s.gaveUp}`,
+        `- Deaths ${s.deaths}, restarts ${Object.values(exits).reduce((a, n) => a + n, 0)} (${s.crashes} after a wedged action, by reason below), budget pauses ${count(e => e.type === 'paused')}, goals given up ${s.gaveUp}`,
         `- Cost ${s.usd === null ? '-' : `$${s.usd.toFixed(4)}`} (${s.usdPerHour === null ? '-' : `$${s.usdPerHour.toFixed(4)}/h`}), **${monthly} per bot per month** running 24/7`,
         `- Memory, agent process: ${mb(agentMb)}; MindServer worker: ${mb(workerMb)}`,
         '',
