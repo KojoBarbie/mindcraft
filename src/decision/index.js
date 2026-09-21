@@ -19,3 +19,4 @@ export { planGoal, focusFor } from './planner.js';
 export { SURVIVAL_CURRICULUM, loadCurriculum } from './curriculum.js';
 export { TacticalLoop, attachTacticalLoop } from './tactical_loop.js';
 export { LoopGuard } from './guard.js';
+export { STATE_VERSION, saveJSON, loadJSON, fingerprint } from './persistence.js';

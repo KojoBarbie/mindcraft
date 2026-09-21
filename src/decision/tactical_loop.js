@@ -14,6 +14,7 @@ import { focusFor, planGoal } from './planner.js';
 import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
 import { LoopGuard, metered } from './guard.js';
+import { STATE_VERSION, fingerprint, loadJSON, saveJSON } from './persistence.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./snapshot.js').RecentAction} RecentAction */
@@ -61,6 +62,9 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {(event: {type: string, detail?: unknown}) => void} [onEvent] for logging and, later, telemetry
  * @property {(command: string) => Promise<string>} [execute] injected in tests; defaults to Mindcraft's executeCommand
  * @property {LoopGuard} [guard] stall and repeat detection and budgets; a default one if omitted
+ * @property {string} [statePath] where to save the loop's state so a restarted agent carries on; unset = not saved
+ * @property {string} [goalsFingerprint] what the profile asked for, saved alongside so a changed profile starts afresh
+ * @property {number} [crashBanMs] how long to ban the command that was running when the agent last crashed
  */
 
 /**
@@ -103,6 +107,11 @@ export class TacticalLoop {
         this.onEvent = options.onEvent ?? (() => {});
         this.execute = options.execute;
         this.guard = options.guard ?? new LoopGuard();
+        this.statePath = options.statePath;
+        this.goalsFingerprint = options.goalsFingerprint ?? '';
+        this.crashBanMs = options.crashBanMs ?? 5 * 60_000;
+        this.restarts = 0;
+        this.lastSavedAt = 0;
         // Every call through the loop is charged to the guard, retries and failures included.
         this.provider = metered(provider, this.guard);
         /** @type {number | null} the goal the guard's counters are about */
@@ -146,6 +155,7 @@ export class TacticalLoop {
         if (this.timer) clearTimeout(this.timer);
         this.timer = null;
         for (const off of this.unbind.splice(0)) off();
+        this.persist(true);
         this.onEvent({ type: 'stop' });
         while (this.deciding) await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -268,6 +278,7 @@ export class TacticalLoop {
         try {
             this.checkCommandTimeout();
             await this.decide();
+            this.persist();
         } catch (error) {
             this.onEvent({ type: 'error', detail: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -465,6 +476,9 @@ export class TacticalLoop {
         });
         this.pendingCommand = command;
         this.commandStartedAt = Date.now();
+        // Saved before it runs: if this command wedges the agent and Mindcraft kills the process, the restarted
+        // agent needs to know what it was doing.
+        this.persist(true);
         Promise.resolve(execute(command))
             .then(output => this.record(command, String(output ?? ''), goalId, before, epoch, countsTowardGoal))
             .catch(error => this.record(command, `failed: ${error instanceof Error ? error.message : String(error)}`, goalId, before, epoch, countsTowardGoal))
@@ -501,6 +515,69 @@ export class TacticalLoop {
             else this.goals.reportFailure(goalId);
         }
         this.onEvent({ type: 'result', detail: { command, ok, progressed, inconclusive, output: said } });
+        this.persist();
+    }
+
+    /**
+     * Save the state to `statePath`, at most every couple of seconds unless forced.
+     * @param {boolean} [force]
+     * @param {{clean?: boolean}} [options]
+     */
+    persist(force = false, options = {}) {
+        if (!this.statePath) return;
+        const now = Date.now();
+        if (!force && now - this.lastSavedAt < 2000) return;
+        this.lastSavedAt = now;
+        try {
+            saveJSON(this.statePath, this.stateSnapshot(options));
+        } catch (error) {
+            this.onEvent({ type: 'error', detail: `could not save state: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    }
+
+    /** @param {{clean?: boolean}} [options] clean: the agent is being shut down on purpose, not crashing */
+    stateSnapshot(options = {}) {
+        return {
+            version: STATE_VERSION,
+            savedAt: Date.now(),
+            clean: options.clean === true,
+            goalsFingerprint: this.goalsFingerprint,
+            goals: this.goals.toJSON(),
+            guard: this.guard.toJSON(),
+            loop: {
+                recent: this.recent,
+                stuckSince: [...this.stuckSince],
+                restarts: this.restarts,
+                runningCommand: options.clean ? null : this.pendingCommand,
+            },
+        };
+    }
+
+    /**
+     * Carry on from a saved state. If it was saved moments ago the agent has just been restarted, most likely
+     * killed by Mindcraft because an action would not stop; the command that was running then is the prime
+     * suspect, so it is banned for a while instead of being tried again from the same spot.
+     * @param {any} saved from stateSnapshot()
+     * @param {{recentMs?: number}} [options]
+     */
+    restoreState(saved, options = {}) {
+        if (!saved || saved.version !== STATE_VERSION) return;
+        this.guard.restore(saved.guard);
+        const loop = saved.loop ?? {};
+        if (Array.isArray(loop.recent))
+            this.recent = loop.recent.filter((/** @type {any} */ r) => r && typeof r.cmd === 'string').slice(-this.recentActions);
+        if (Array.isArray(loop.stuckSince))
+            this.stuckSince = new Map(loop.stuckSince.filter((/** @type {any} */ e) => Array.isArray(e) && Number.isInteger(e[0]) && Number.isFinite(e[1])));
+        this.restarts = Number.isInteger(loop.restarts) && loop.restarts >= 0 ? loop.restarts : 0;
+        const age = Date.now() - (Number.isFinite(saved.savedAt) ? saved.savedAt : 0);
+        if (saved.clean !== true && age <= (options.recentMs ?? 90_000)) {
+            this.restarts++;
+            const suspect = typeof loop.runningCommand === 'string' && loop.runningCommand ? loop.runningCommand : null;
+            if (suspect) this.guard.ban(suspect, this.crashBanMs);
+            this.onEvent({ type: 'restored after restart', detail: { restarts: this.restarts, bannedSuspect: suspect, ageMs: age } });
+        } else {
+            this.onEvent({ type: 'restored', detail: { ageMs: age } });
+        }
     }
 
     /** @param {string} [goalText] */
@@ -543,8 +620,15 @@ export async function attachTacticalLoop(agent) {
     const provider = createDecisionProviderFromProfile(profile);
     if (!provider) return null;
 
-    const goals = new GoalQueue();
-    if (Array.isArray(profile.goals)) {
+    const statePath = `./bots/${agent.name}/decision_state.json`;
+    const saved = loadJSON(statePath);
+    const goalsFingerprint = fingerprint({ goals: profile.goals ?? null, curriculum: profile.curriculum ?? null });
+    const sameGoals = saved?.version === STATE_VERSION && saved.goalsFingerprint === goalsFingerprint && saved.goals;
+
+    const goals = sameGoals ? GoalQueue.fromJSON(saved.goals) : new GoalQueue();
+    if (sameGoals) {
+        // carrying on where it left off, failed goals and all
+    } else if (Array.isArray(profile.goals)) {
         // explicit goals, in priority order: what a server operator asks the bot to do
         const known = ['have_item', 'have_tool', 'have_food'];
         profile.goals.forEach((/** @type {any} */ goal, /** @type {number} */ index) => {
@@ -558,7 +642,21 @@ export async function attachTacticalLoop(agent) {
     const loop = new TacticalLoop(agent, provider, goals, createGameData(agent.bot.registry), {
         ...profile.tactical,
         guard: new LoopGuard(profile.guard ?? {}),
+        statePath,
+        goalsFingerprint,
         onEvent: event => console.log(`[tactical:${agent.name}]`, event.type, event.detail === undefined ? '' : JSON.stringify(event.detail)),
+    });
+    loop.restoreState(saved); // budgets and bans carry over even when the goals were rebuilt
+    // Mindcraft ends the agent with process.exit() when an action will not stop (a crash, as far as the loop is
+    // concerned: the running command is kept as the suspect) and with SIGINT when told to stop (a clean exit).
+    let stopping = false;
+    process.once('exit', () => {
+        if (!stopping) loop.persist(true);
+    });
+    process.once('SIGINT', () => {
+        stopping = true;
+        loop.persist(true, { clean: true });
+        process.exit(0);
     });
     loop.start();
     return loop;
