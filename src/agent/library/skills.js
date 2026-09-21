@@ -2110,6 +2110,22 @@ export async function useToolOn(bot, toolName, targetName) {
     return true;
  }
 
+// mindcraft fork: ground a shelter can be dug into by hand.
+const SOFT_GROUND = ['grass_block', 'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay', 'moss_block'];
+
+/** Can the three blocks under these feet be dug with what the bot has (or are they already air)? */
+function canDigShaft(bot, feet) {
+    const tools = bot.inventory.items().map(item => item.type);
+    for (let dy = 1; dy <= 3; dy++) {
+        const block = bot.blockAt(feet.offset(0, -dy, 0));
+        if (!block) return false;
+        if (block.boundingBox === 'empty') continue;
+        if (block.name === 'lava' || block.name === 'water' || block.name === 'bedrock') return false;
+        if (!block.canHarvest(null) && !tools.some(id => block.canHarvest(id))) return false;
+    }
+    return true;
+}
+
 // mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall (a roof of them lands
 // on the bot's head); planks are left alone because the first goals need them for tools.
 const SHELTER_FILLERS = ['dirt', 'coarse_dirt', 'rooted_dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'andesite',
@@ -2128,6 +2144,21 @@ export async function shelter(bot) {
     if (world.isEnclosed(bot)) {
         log(bot, 'Already sheltered.');
         return true;
+    }
+    // Three blocks down must be diggable with what the bot holds: on bare rock without a pickaxe, walk to
+    // softer ground first (a night test failed three times on stone and died five times).
+    if (!canDigShaft(bot, bot.entity.position.floored())) {
+        const soft = world.getNearestBlocksWhere(bot, b => !!b?.position && SOFT_GROUND.includes(b.name)
+            && canDigShaft(bot, b.position.offset(0, 1, 0)) && !isUnreachable(bot, b.position), 24, 1)[0];
+        if (!soft) {
+            log(bot, 'The ground here is too hard to dig with what I have, and there is no soft ground nearby.');
+            return false;
+        }
+        log(bot, `The ground here is too hard to dig; going to ${soft.name} at ${soft.position}.`);
+        if (!await goToPosition(bot, soft.position.x, soft.position.y + 1, soft.position.z, 0)) {
+            markUnreachable(bot, soft.position);
+            return false;
+        }
     }
     const ground = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
     if (!ground || ground.boundingBox !== 'block') {

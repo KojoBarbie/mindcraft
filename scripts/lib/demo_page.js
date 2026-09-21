@@ -270,7 +270,7 @@ function draw() {
   const hud = document.getElementById('hud'); hud.textContent = '';
   const add = t => { const s = document.createElement('span'); s.textContent = t; hud.appendChild(s); };
   if (f.h != null) add('体力 ' + f.h + '/20'); if (f.f != null) add('空腹 ' + f.f + '/20');
-  if (f.n != null) add(f.n >= 12500 && f.n < 23300 ? '夜' : '昼');
+  if (f.n != null) add(f.n >= 12000 && f.n < 23300 ? '夜' : '昼');
   document.getElementById('goal').textContent = f.g || '（目標なし）';
   document.getElementById('inv').textContent = f.inv.length ? f.inv.map(([n, c]) => n + ' ×' + c).join('、') : '（空）';
   clock.textContent = fmt(f.t) + ' / ' + fmt(last);

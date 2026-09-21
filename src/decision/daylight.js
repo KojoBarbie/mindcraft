@@ -4,10 +4,11 @@
 
 /**
  * Minecraft time of day (0-23,999). Hostile mobs start spawning on the surface at about 13,000 in clear
- * weather; the loop starts preparing a little earlier. The sun is up again from about 23,000 and undead start
+ * weather; the loop starts preparing a full minute earlier, which leaves time to walk to soft ground and to
+ * try again if the first hole fails. The sun is up again from about 23,000 and undead start
  * to burn soon after; the loop leaves its shelter at 23,300.
  */
-export const NIGHT_START = 12_500;
+export const NIGHT_START = 12_000;
 export const NIGHT_END = 23_300;
 
 /** @param {number} timeOfDay */
