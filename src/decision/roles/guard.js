@@ -96,13 +96,16 @@ export function createGuardRole(options = {}) {
                 if (!(inv.iron_chestplate > 0) && !(inv.diamond_chestplate > 0)) short.push(() => ensureGoal(loop.goals, haveItem('iron_chestplate', 1), 975));
                 if (!(inv.shield > 0)) short.push(() => ensureGoal(loop.goals, haveItem('shield', 1), 970));
                 if ((inv.torch ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
-                // a little food is enough to heal between fights; asking for eight sent it far afield for animals
-                if (food < 2) short.push(() => ensureGoal(loop.goals, haveFood(4), 995));
+                // a little food is enough to heal between fights; asking for eight sent it far afield for animals,
+                // and put first it took the whole day where there were none: the sword and torches come first
+                if (food < 2) short.push(() => ensureGoal(loop.goals, haveFood(4), 960));
                 if (short.length > 0) {
                     for (const queue of short) queue();
                     return null;
                 }
             }
+            // unequipped at night: leave it to the loop's night routine (dig in), not a round it cannot fight
+            if (night && !ready) return null;
             return `!patrol(${post.x}, ${post.y}, ${post.z}, ${radius})`;
         },
     };

@@ -97,7 +97,7 @@ export async function patrol(bot, center, radius = 24) {
 
     // 2. hurt: back to the post and eat
     if (bot.health < 12 || bot.food < 14) {
-        if (bot.entity.position.distanceTo(post) > 4) await goToGoal(bot, new pf.goals.GoalNear(post.x, post.y, post.z, 2)).catch(() => {});
+        if (bot.entity.position.distanceTo(post) > 4) await goToGoal(bot, new pf.goals.GoalNearXZ(post.x, post.z, 2)).catch(() => {}); // the post's height is where the bot stood (a tree top at spawn)
         const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
         if (food && bot.food < 20) {
             await consume(bot, food);
