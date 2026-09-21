@@ -104,7 +104,20 @@ export async function craftRecipe(bot, itemName, num=1) {
     const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe); //Items required to use the recipe once.
     const craftLimit = mc.calculateLimitingResource(inventory, requiredIngredients);
     
-    await bot.craft(recipe, Math.min(craftLimit.num, num), craftingTable);
+    try {
+        await bot.craft(recipe, Math.min(craftLimit.num, num), craftingTable);
+    } catch (err) {
+        // mindcraft fork: a batch craft sometimes throws "missing ingredient" with everything at hand (6 torches
+        // from 5 coal and 9 sticks), and the bot went off to explore instead. One at a time, recipe fetched afresh.
+        if (!/missing ingredient/i.test(String(err))) throw err;
+        let made = 0;
+        for (let i = 0; i < Math.min(craftLimit.num, num); i++) {
+            const again = bot.recipesFor(mc.getItemId(itemName), null, 1, craftingTable)[0];
+            if (!again) break;
+            try { await bot.craft(again, 1, craftingTable); made++; } catch { break; }
+        }
+        if (made === 0) throw err;
+    }
     if(craftLimit.num<num) log(bot, `Not enough ${craftLimit.limitingResource} to craft ${num}, crafted ${craftLimit.num}. You now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     else log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
     if (placedTable) {

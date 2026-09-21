@@ -1050,7 +1050,9 @@ export async function attachTacticalLoop(agent) {
             if (event.type === 'gave up' || (event.type === 'stuck' && /** @type {any} */ (event.detail)?.givenUp))
                 strategist?.consult({ kind: 'gave_up', detail: event.detail }, strategyContext());
         },
-        onLowConfidence: ({ chosen, goal }) =>
+        // with a role the job decides what is needed: a strategist asked out of low confidence put "8 food" ahead
+        // of a guard's iron sword, and the guard spent the day hunting and died to a witch
+        onLowConfidence: ({ chosen, goal }) => role ? undefined :
             strategist?.consult({ kind: 'low_confidence', detail: { goal, command: chosen.command, confidence: chosen.confidence } }, strategyContext()),
     });
     const strategyContext = () => ({ snapshot: loop.rawSnapshot(), goals: loop.goals, currentGoal: loop.currentGoal || null, recent: loop.recent, memory: loop.planMemory() });
