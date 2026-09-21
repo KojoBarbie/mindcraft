@@ -18,6 +18,78 @@ index 496cf63..813a667 100644
        !bot.entity.onGround,
        enchantments,
        bot.entity.effects
+diff --git a/node_modules/mineflayer/lib/plugins/entities.js b/node_modules/mineflayer/lib/plugins/entities.js
+index 666b0b3..d14c329 100644
+--- a/node_modules/mineflayer/lib/plugins/entities.js
++++ b/node_modules/mineflayer/lib/plugins/entities.js
+@@ -8,7 +8,26 @@ const PLAYER_WIDTH = 0.6
+ const PLAYER_EYEHEIGHT = 1.62
+ const CROUCH_EYEHEIGHT = 1.27
+ 
++
++// mindcraft fork: minecraft-data 3.116 (pulled in through ^3.97.0) describes spawn_entity and entity_velocity with
++// `velocity: {x, y, z}` (vec3i16) where mineflayer 4.33 still reads velocityX/Y/Z. Reading the old names gave
++// undefined, i.e. a NaN velocity on every knockback, which the next physics step turned into a NaN position:
++// kicks for "Invalid move player packet" and a pathfinder raycast that never ended. Both shapes are read; a
++// packet with neither is reported once rather than silently taken as standing still.
++let unreadableVelocityReported = false
++function readNotchVelocity (packet) {
++  const v = packet.velocity && typeof packet.velocity === 'object' ? packet.velocity : { x: packet.velocityX, y: packet.velocityY, z: packet.velocityZ }
++  if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
++    if (!unreadableVelocityReported) {
++      unreadableVelocityReported = true
++      console.warn('[entities] a velocity packet in an unknown shape; treating it as zero:', JSON.stringify(Object.keys(packet)))
++    }
++  }
++  return new Vec3(Number.isFinite(v.x) ? v.x : 0, Number.isFinite(v.y) ? v.y : 0, Number.isFinite(v.z) ? v.z : 0)
++}
++
+ module.exports = inject
++module.exports.readNotchVelocity = readNotchVelocity // mindcraft fork: for test/decision/patches.test.js
+ 
+ const animationEvents = {
+   0: 'entitySwingArm',
+@@ -229,6 +248,7 @@ function inject (bot) {
+     const entity = entityData?.type === 'player'
+       ? addNewPlayer(packet.entityId, packet.objectUUID, packet)
+       : addNewNonPlayer(packet.entityId, packet.objectUUID, packet.type, packet)
++    entity.velocity.update(conv.fromNotchVelocity(readNotchVelocity(packet))) // mindcraft fork: was never read
+     bot.emit('entitySpawn', entity)
+   })
+ 
+@@ -271,7 +291,7 @@ function inject (bot) {
+     entity.pitch = conv.fromNotchianPitchByte(packet.pitch)
+     entity.headPitch = conv.fromNotchianPitchByte(packet.headPitch)
+ 
+-    const notchVel = new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)
++    const notchVel = readNotchVelocity(packet)
+     entity.velocity.update(conv.fromNotchVelocity(notchVel))
+     entity.metadata = parseMetadata(packet.metadata, entity.metadata)
+ 
+@@ -281,7 +301,7 @@ function inject (bot) {
+   bot._client.on('entity_velocity', (packet) => {
+     // entity velocity
+     const entity = fetchEntity(packet.entityId)
+-    const notchVel = new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)
++    const notchVel = readNotchVelocity(packet)
+     entity.velocity.update(conv.fromNotchVelocity(notchVel))
+   })
+ 
+@@ -348,9 +368,11 @@ function inject (bot) {
+   bot._client.on('sync_entity_position', (packet) => {
+     const entity = fetchEntity(packet.entityId)
+     entity.position.set(packet.x, packet.y, packet.z)
+-    entity.velocity.update(packet.dx, packet.dy, packet.dz)
+-    entity.yaw = packet.yaw
+-    entity.pitch = packet.pitch
++    // mindcraft fork: Vec3.update() takes a vector, so the three numbers left the velocity undefined; and the
++    // angles arrive in degrees, not the radians mineflayer keeps
++    entity.velocity.set(packet.dx, packet.dy, packet.dz)
++    entity.yaw = conv.fromNotchianYaw(packet.yaw)
++    entity.pitch = conv.fromNotchianPitch(packet.pitch)
+     bot.emit('entityMoved', entity)
+   })
+ 
 diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
 index 70db312..93d2054 100644
 --- a/node_modules/mineflayer/lib/plugins/inventory.js
@@ -40,39 +112,52 @@ index 70db312..93d2054 100644
      }
    }
 diff --git a/node_modules/mineflayer/lib/plugins/physics.js b/node_modules/mineflayer/lib/plugins/physics.js
-index 0bcf679..93bc3af 100644
+index 0bcf679..56da9ed 100644
 --- a/node_modules/mineflayer/lib/plugins/physics.js
 +++ b/node_modules/mineflayer/lib/plugins/physics.js
-@@ -75,7 +75,36 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+@@ -75,10 +75,55 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
      }
    }
  
-+  // mindcraft fork: never let a non-finite position reach the server. On 1.21.x the bot's x/z occasionally
-+  // become NaN (seen after taking damage and after server position corrections); the next movement packet then
-+  // gets the bot kicked with "Invalid move player packet received". Put it back where it last was instead.
++  // mindcraft fork: never let a non-finite velocity, heading or position reach the physics step, its listeners
++  // (the pathfinder's GoalLookAtBlock raycast looped for ever on a NaN position) or the server (which kicks for
++  // "Invalid move player packet received"). The cause was a velocity packet read under the wrong field names
++  // (see entities.js); this is the backstop. bot.nanRecoveries counts repairs and should stay at 0.
 +  let lastGoodPosition = null
 +  bot.nanRecoveries = 0
 +  function repairNonFinitePosition () {
-+    const pos = bot.entity.position
++    const e = bot.entity
++    const broken = []
++    if (!Number.isFinite(e.yaw) || !Number.isFinite(e.pitch)) {
++      broken.push(`heading (${e.yaw}, ${e.pitch})`)
++      if (!Number.isFinite(e.yaw)) e.yaw = 0
++      if (!Number.isFinite(e.pitch)) e.pitch = 0
++    }
++    const vel = e.velocity
++    if (!Number.isFinite(vel.x) || !Number.isFinite(vel.y) || !Number.isFinite(vel.z)) {
++      broken.push(`velocity (${vel.x}, ${vel.y}, ${vel.z})`)
++      if (!Number.isFinite(vel.x)) vel.x = 0
++      if (!Number.isFinite(vel.y)) vel.y = 0
++      if (!Number.isFinite(vel.z)) vel.z = 0
++    }
++    const pos = e.position
 +    if (Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
 +      if (lastGoodPosition) lastGoodPosition.update(pos)
 +      else lastGoodPosition = pos.clone()
-+      return
++    } else {
++      broken.push(`position (${pos.x}, ${pos.y}, ${pos.z}), restored from ${lastGoodPosition ? lastGoodPosition.toString() : 'nothing'}`)
++      // Only the broken axes come back. y is finite and still under gravity, so a bot that was falling keeps
++      // falling; pinning it to an old mid-air position would look like flying and get it kicked for that instead.
++      if (lastGoodPosition) {
++        if (!Number.isFinite(pos.x)) pos.x = lastGoodPosition.x
++        if (!Number.isFinite(pos.y)) pos.y = lastGoodPosition.y
++        if (!Number.isFinite(pos.z)) pos.z = lastGoodPosition.z
++      }
 +    }
-+    bot.nanRecoveries++
-+    const vel = bot.entity.velocity
-+    console.warn(`[physics] non-finite position (${pos.x}, ${pos.y}, ${pos.z}), velocity (${vel.x}, ${vel.y}, ${vel.z}); ` +
-+      `restoring ${lastGoodPosition ? lastGoodPosition.toString() : 'nothing (no finite position seen yet)'} [#${bot.nanRecoveries}]`)
-+    // Only the broken axes come back. y is finite and still under gravity, so a bot that was falling keeps
-+    // falling; pinning it to an old mid-air position would look like flying and get it kicked for that instead.
-+    if (lastGoodPosition) {
-+      if (!Number.isFinite(pos.x)) pos.x = lastGoodPosition.x
-+      if (!Number.isFinite(pos.y)) pos.y = lastGoodPosition.y
-+      if (!Number.isFinite(pos.z)) pos.z = lastGoodPosition.z
++    if (broken.length > 0) {
++      bot.nanRecoveries++
++      console.warn(`[physics] repaired non-finite ${broken.join('; ')} [#${bot.nanRecoveries}]`)
 +    }
-+    if (!Number.isFinite(vel.x)) vel.x = 0
-+    if (!Number.isFinite(vel.y)) vel.y = 0
-+    if (!Number.isFinite(vel.z)) vel.z = 0
 +  }
 +
    function tickPhysics (now) {
@@ -80,7 +165,13 @@ index 0bcf679..93bc3af 100644
      if (bot.blockAt(bot.entity.position) == null) return // check if chunk is unloaded
      if (bot.physicsEnabled && shouldUsePhysics) {
        physics.simulatePlayer(new PlayerState(bot, controlState), world).apply(bot)
-@@ -97,7 +126,19 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
++      // and again after the step: physicsTick listeners (the pathfinder) must never see NaN. A NaN position
++      // there sends GoalLookAtBlock's raycast into an endless loop that freezes the whole process.
++      repairNonFinitePosition()
+       bot.emit('physicsTick')
+       bot.emit('physicTick') // Deprecated, only exists to support old plugins. May be removed in the future
+     }
+@@ -97,7 +142,19 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
      doPhysicsTimer = null
    }
  
@@ -100,7 +191,7 @@ index 0bcf679..93bc3af 100644
      // sends data, no logic
      const oldPos = new Vec3(lastSent.x, lastSent.y, lastSent.z)
      lastSent.x = position.x
-@@ -110,6 +151,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+@@ -110,6 +167,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
    }
  
    function sendPacketLook (yaw, pitch, onGround) {
@@ -108,7 +199,7 @@ index 0bcf679..93bc3af 100644
      // sends data, no logic
      const oldPos = new Vec3(lastSent.x, lastSent.y, lastSent.z)
      lastSent.yaw = yaw
-@@ -122,6 +164,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+@@ -122,6 +180,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
  
    function sendPacketPositionAndLook (position, yaw, pitch, onGround) {
      // sends data, no logic
