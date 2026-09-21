@@ -37,6 +37,12 @@ if (!request) {
 const minutes = Number(opt('minutes', '8'));
 const fps = Number(opt('fps', '2'));
 const name = opt('name', 'demo_bot');
+// --role miner: run a role (src/decision/roles/) centred where the bot starts; --until diamond:1 ends the run
+// as soon as the inventory holds that many
+const role = opt('role', '');
+const [untilItem, untilCount] = opt('until', '').split(':');
+// --role-options '{"quota": 16, "chest": "start"}'; --chest puts a chest two blocks east of the bot at the start
+const roleOptions = JSON.parse(opt('role-options', '{}'));
 const port = Number(opt('port', '8120')); // the MindServer's; give each demo running at once its own
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 /** @param {string} path */
@@ -60,12 +66,22 @@ async function main() {
 
     const harness = await startHarness({
         name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000,
-        profile: { decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini' },
+        profile: {
+            decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini',
+            ...(role ? { role: { type: role, ...roleOptions } } : {}),
+            tactical: { startDelayMs: 8000 }, // time to move it to the surface and set the scene first
+        },
     });
     await rcon(`clear ${name}`);
     // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
     // began inside the previous night's shelter).
     if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
+    if (args.includes('--chest')) await rcon(`execute at ${name} run setblock ~2 ~ ~ minecraft:chest`);
+    // --give iron_pickaxe:1,torch:32 : a starting kit, to try one part of a role without waiting for the rest
+    for (const entry of opt('give', '').split(',').filter(Boolean)) {
+        const [item, count] = entry.split(':');
+        await rcon(`give ${name} minecraft:${item} ${Number(count || 1)}`);
+    }
     /** @type {any} */
     let latest = null;
     const feed = io(`http://localhost:${port}`);
@@ -84,7 +100,7 @@ async function main() {
         while (Date.now() < deadline) {
             const tick = Date.now();
             if (!requestedAt && tick - startedAt > 3_000) {
-                harness.post(request); // a player's request, as the strategist hears it
+                if (request !== '-') harness.post(request); // a player's request, as the strategist hears it
                 requestedAt = Date.now();
             }
             await rig.follow();
@@ -101,7 +117,8 @@ async function main() {
             }
             // Done when every goal the request produced is met; film a few seconds more, then stop.
             const goals = latest?.tactical?.goals ?? [];
-            if (doneAt === null && requestedAt && goals.length > 0 && goals.every((/** @type {any} */ g) => g.status === 'done')) doneAt = Date.now();
+            if (doneAt === null && requestedAt && !untilItem && !role && goals.length > 0 && goals.every((/** @type {any} */ g) => g.status === 'done')) doneAt = Date.now();
+            if (doneAt === null && untilItem && (latest?.inventory?.counts?.[untilItem] ?? 0) >= Number(untilCount || 1)) doneAt = Date.now();
             if (doneAt !== null && Date.now() - doneAt > 8_000) break;
             await sleep(Math.max(0, 1000 / fps - (Date.now() - tick)));
         }

@@ -1,4 +1,7 @@
 import * as skills from '../library/skills.js';
+import * as mining from '../library/mining.js';
+import * as forestry from '../library/forestry.js';
+import * as guard from '../library/guard.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 
@@ -155,6 +158,63 @@ export const actionsList = [
         params: {'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] }},
         perform: runAsAction(async (agent, distance) => {
             await skills.moveAway(agent.bot, distance);
+        })
+    },
+    {
+        name: '!descendTo',
+        description: 'Dig a staircase down until your feet are at the given y level, stopping short of lava and water.',
+        params: {'y': { type: 'int', description: 'The y level to reach.', domain: [-64, 320] }},
+        perform: runAsAction(async (agent, y) => {
+            await mining.descendTo(agent.bot, y);
+        })
+    },
+    {
+        name: '!branchMine',
+        description: 'Branch mine where you stand: a few blocks along the main tunnel and a branch to each side, taking ores seen in the walls. Stays within the radius of the center.',
+        params: {
+            'center_x': { type: 'float', description: 'x of the center of the mining area.', domain: [-30000000, 30000000] },
+            'center_z': { type: 'float', description: 'z of the center of the mining area.', domain: [-30000000, 30000000] },
+            'radius': { type: 'int', description: 'How far from the center to mine.', domain: [8, 256] },
+        },
+        perform: runAsAction(async (agent, x, z, radius) => {
+            await mining.branchMine(agent.bot, { x, z }, radius);
+        })
+    },
+    {
+        name: '!patrol',
+        description: 'Guard the area around a post for a moment: fight a hostile mob inside it, retreat and eat when hurt, light a dark spot, or walk on along the round.',
+        params: {
+            'center_x': { type: 'float', description: 'x of the post.', domain: [-30000000, 30000000] },
+            'center_y': { type: 'float', description: 'y of the post.', domain: [-64, 320] },
+            'center_z': { type: 'float', description: 'z of the post.', domain: [-30000000, 30000000] },
+            'radius': { type: 'int', description: 'How far from the post to guard.', domain: [4, 128] },
+        },
+        perform: runAsAction(async (agent, x, y, z, radius) => {
+            await guard.patrol(agent.bot, { x, y, z }, radius);
+        })
+    },
+    {
+        name: '!chopTree',
+        description: 'Fell the nearest whole tree within the radius of the center, pick up what drops and replant a sapling.',
+        params: {
+            'center_x': { type: 'float', description: 'x of the center of the area.', domain: [-30000000, 30000000] },
+            'center_z': { type: 'float', description: 'z of the center of the area.', domain: [-30000000, 30000000] },
+            'radius': { type: 'int', description: 'How far from the center to look for trees.', domain: [4, 256] },
+        },
+        perform: runAsAction(async (agent, x, z, radius) => {
+            await forestry.chopTree(agent.bot, { x, z }, radius);
+        })
+    },
+    {
+        name: '!depositLogs',
+        description: 'Put all logs into the chest at the given position.',
+        params: {
+            'x': { type: 'int', description: 'x of the chest.', domain: [-30000000, 30000000] },
+            'y': { type: 'int', description: 'y of the chest.', domain: [-64, 320] },
+            'z': { type: 'int', description: 'z of the chest.', domain: [-30000000, 30000000] },
+        },
+        perform: runAsAction(async (agent, x, y, z) => {
+            await forestry.depositLogs(agent.bot, x, y, z);
         })
     },
     {

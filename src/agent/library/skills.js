@@ -2234,8 +2234,8 @@ export async function shelter(bot) {
     // Three blocks down must be diggable with what the bot holds: on bare rock without a pickaxe, walk to
     // softer ground first (a night test failed three times on stone and died five times).
     if (!canDigShaft(bot, bot.entity.position.floored())) {
-        const soft = world.getNearestBlocksWhere(bot, b => !!b?.position && SOFT_GROUND.includes(b.name)
-            && canDigShaft(bot, b.position.offset(0, 1, 0)) && !isUnreachable(bot, b.position), 48, 1)[0];
+        const soft = world.getNearestBlocksNamed(bot, SOFT_GROUND, b => canDigShaft(bot, b.position.offset(0, 1, 0))
+            && bot.blockAt(b.position.offset(0, 1, 0))?.boundingBox === 'empty' && !isUnreachable(bot, b.position), 48, 1)[0];
         if (!soft) {
             log(bot, 'The ground here is too hard to dig with what I have, and there is no soft ground nearby.');
             return false;

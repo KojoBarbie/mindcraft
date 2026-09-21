@@ -30,6 +30,9 @@ import { createStrategist, isAddressedTo } from './strategist.js';
  */
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
+/** Commands a role's routine issues: while one runs, the loop leaves it alone. */
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs', '!patrol'];
+
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };
 
@@ -71,6 +74,10 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
  * @property {boolean} [nightShelter] at night, dig in and wait for morning instead of deciding; default true.
  *   Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
+ * @property {{name: string, keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null}} [role]
+ *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
+ *   loop pursue its goals as usual
+ * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)
  * @property {number} [nightMaxMs] the longest the loop waits out one night, in real time; a night lasts about 7
  *   minutes, but with the daylight cycle off it never ends. Default 12 minutes.
  * @property {(record: Record<string, unknown>) => void} [telemetry] receives every provider call and the loop's
@@ -163,6 +170,9 @@ export class TacticalLoop {
         /** @type {Map<string, {until: number, x: number, z: number}>} block type -> until when, and where, a search for it failed */
         this.absentBlocks = new Map();
         this.nightShelter = options.nightShelter ?? true;
+        this.role = options.role ?? null;
+        this.startDelayMs = options.startDelayMs ?? 0;
+        this.startedAt = 0;
         this.nightMaxMs = options.nightMaxMs ?? 12 * 60_000;
         /** @type {{y: number, at: number} | null} where and when it dug in: at dawn it climbs out from there */
         this.sheltered = null;
@@ -230,6 +240,7 @@ export class TacticalLoop {
     }
 
     start() {
+        this.startedAt = Date.now();
         if (this.running) return;
         this.running = true;
         this.bindEvents();
@@ -391,6 +402,7 @@ export class TacticalLoop {
 
     async decide() {
         if (this.dead) return;
+        if (Date.now() - this.startedAt < this.startDelayMs) return;
         const epoch = this.epoch;
         if (this.pauseWhenAlone && !this.anyPlayerOnline()) {
             this.onEvent({ type: 'idle', detail: 'nobody online' });
@@ -398,7 +410,7 @@ export class TacticalLoop {
         }
 
         // The night is handled by rule, before anything costs money: see nightRoutine().
-        if (this.nightShelter && this.nightRoutine(epoch)) return;
+        if (this.nightShelter && !this.role?.keepsWatchAtNight && this.nightRoutine(epoch)) return;
 
         // Budgets apply to every provider call, the cheap interrupt question included.
         const paused = this.guard.overBudget();
@@ -406,6 +418,22 @@ export class TacticalLoop {
             this.onEvent({ type: 'paused', detail: { reason: paused.reason, retryAfterMs: paused.retryAfterMs } });
             this.holdUntil(paused.retryAfterMs ?? this.periodMs);
             return;
+        }
+
+        // A role's routine runs by rule, between goals: the role queues goals itself when it lacks something.
+        if (this.role) {
+            const busyWithRole = this.pendingCommand && ROLE_COMMANDS.some(c => this.pendingCommand.startsWith(c));
+            if (busyWithRole) return;
+            if (!this.pendingCommand && this.agent.isIdle()) {
+                const raw = this.rawSnapshot();
+                const command = this.role.step(this, raw, this.data.isFood);
+                if (command) {
+                    this.onEvent({ type: 'role', detail: { role: this.role.name, command } });
+                    this.lastDecisionAt = Date.now();
+                    this.run(command, -1, this.progressSignature(raw), epoch, false);
+                    return;
+                }
+            }
         }
 
         const revived = this.goals.reviveFailed(Date.now(), this.retryFailedAfterMs);
@@ -994,11 +1022,24 @@ export async function attachTacticalLoop(agent) {
     const telemetry = profile.telemetry === false ? undefined : createTelemetry(`./bots/${agent.name}/decisions.jsonl`, {
         onError: error => console.warn(`[tactical:${agent.name}] telemetry write failed:`, error instanceof Error ? error.message : error),
     });
+    /** @type {any} */
+    let role = null;
+    if (profile.role?.type === 'miner') {
+        const { createMinerRole } = await import('./roles/miner.js');
+        role = createMinerRole({ center: profile.role.center, radius: profile.role.radius, mineY: profile.role.mineY, say: text => agent.bot.chat(text) });
+    } else if (profile.role?.type === 'guard') {
+        const [{ createGuardRole }, { takeGuardReport }] = await Promise.all([import('./roles/guard.js'), import('../agent/library/guard.js')]);
+        role = createGuardRole({ center: profile.role.center, radius: profile.role.radius, say: text => agent.bot.chat(text), report: () => takeGuardReport(agent.bot) });
+    } else if (profile.role?.type === 'lumberjack') {
+        const { createLumberjackRole } = await import('./roles/lumberjack.js');
+        role = createLumberjackRole({ center: profile.role.center, radius: profile.role.radius, quota: profile.role.quota, chest: profile.role.chest, say: text => agent.bot.chat(text) });
+    }
     const loop = new TacticalLoop(agent, provider, goals, gameData, {
         ...profile.tactical,
         guard: new LoopGuard(profile.guard ?? {}),
         statePath,
         goalsFingerprint,
+        role,
         telemetry,
         onEvent: event => {
             log(event);
