@@ -86,7 +86,7 @@ async function stepInto(bot, cell) {
         while (Date.now() < deadline && !bot.interrupt_code) {
             const p = bot.entity.position;
             const inCell = Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z;
-            if (inCell && Math.abs(p.x - target.x) < 0.35 && Math.abs(p.z - target.z) < 0.35 && bot.entity.onGround && Math.floor(p.y) === cell.y) return true;
+            if (inCell && Math.abs(p.x - target.x) < 0.35 && Math.abs(p.z - target.z) < 0.35 && bot.entity.onGround && Math.floor(p.y) <= cell.y) return true;
             await bot.lookAt(new Vec3(target.x, p.y + 1.6, target.z), true);
             bot.setControlState('forward', !(inCell && Math.hypot(p.x - target.x, p.z - target.z) < 0.25));
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -96,6 +96,20 @@ async function stepInto(bot, cell) {
     }
     const p = bot.entity.position;
     return Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && Math.abs(Math.floor(p.y) - cell.y) <= 1;
+}
+
+/**
+ * A block can only be placed against a neighbour, and under a stair over a cave there may be none. Then the
+ * bot may still drop in if the landing is close (three blocks: no damage) and dry.
+ */
+function safeDrop(bot, step) {
+    for (let depth = 1; depth <= 3; depth++) {
+        const below = bot.blockAt(step.offset(0, -depth, 0));
+        if (!below) return false;
+        if (isLiquid(below)) return false;
+        if (solid(below)) return !nearLiquid(bot, step.offset(0, -depth + 1, 0));
+    }
+    return false;
 }
 
 /** Put a block where a floor is missing, from what mining has piled up in the inventory. */
@@ -167,7 +181,7 @@ export async function descendTo(bot, targetY) {
         if (!blocked && !solid(floor)) {
             // a cave under the next stair: put a floor in it, as a player would, unless lava or water is there
             if (isLiquid(floor) || nearLiquid(bot, step.offset(0, -1, 0))) blocked = 'danger';
-            else if (!await fillFloor(bot, step.offset(0, -1, 0))) blocked = 'drop';
+            else if (!await fillFloor(bot, step.offset(0, -1, 0)) && !safeDrop(bot, step)) blocked = 'drop';
         }
         if (blocked) {
             if (++turns > 4) {

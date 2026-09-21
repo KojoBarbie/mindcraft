@@ -59,10 +59,13 @@ export function createMinerRole(options = {}) {
             // equipment first: an iron pickaxe (diamond ore needs one), light, and something to eat
             const good = goodFood(snapshot, isFood);
             const food = Object.entries(inv).reduce((sum, [name, n]) => sum + (good(name) ? n : 0), 0);
+            // Torches and food are stocked up before going down: underground there are no trees or animals,
+            // and a miner that ran out of torches at y=54 went looking for logs in the dark.
+            const onSurface = snapshot.pos.y > 50;
             const short = [];
             if (!PICKAXES.some(p => (inv[p] ?? 0) > 0)) short.push(() => ensureGoal(loop.goals, haveTool('iron', 'pickaxe'), 1000));
-            if ((inv.torch ?? 0) < 4) short.push(() => ensureGoal(loop.goals, haveItem('torch', 16), 990));
-            if (food < 3) short.push(() => ensureGoal(loop.goals, haveFood(6), 995));
+            if (onSurface && (inv.torch ?? 0) < 16) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
+            if (onSurface && food < 6) short.push(() => ensureGoal(loop.goals, haveFood(8), 995));
             if (short.length > 0) {
                 for (const queue of short) queue();
                 return null;

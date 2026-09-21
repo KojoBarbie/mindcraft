@@ -21,9 +21,15 @@ function inArea(pos, center, radius) {
     return Math.hypot(pos.x - center.x, pos.z - center.z) <= radius;
 }
 
-/** A spot on the ground inside the area where a mob could spawn: no block light, solid floor, room above. */
+const LIGHTS = ['torch', 'wall_torch', 'lantern', 'soul_torch', 'soul_wall_torch', 'glowstone', 'sea_lantern', 'jack_o_lantern', 'campfire', 'shroomlight'];
+
+/**
+ * A spot on the ground inside the area with no light source within six blocks: where mobs spawn at night.
+ * (mineflayer does not report block light for 1.21 chunks, so it is judged by the lights around.)
+ */
 function darkSpot(bot, center, radius) {
     const feet = bot.entity.position.floored();
+    const lights = world.getNearestBlocksNamed(bot, LIGHTS, () => true, 16, 64).map(b => b.position);
     let best = null;
     for (let dx = -8; dx <= 8; dx += 2)
         for (let dz = -8; dz <= 8; dz += 2)
@@ -33,7 +39,7 @@ function darkSpot(bot, center, radius) {
                 const here = bot.blockAt(pos, true);
                 const below = bot.blockAt(pos.offset(0, -1, 0));
                 if (!here || here.name !== 'air' || !below || below.boundingBox !== 'block' || below.name.includes('leaves')) continue;
-                if ((here.light ?? 15) > 0) continue;
+                if (lights.some(l => l.distanceTo(pos) <= 6)) continue;
                 const d = pos.distanceTo(feet);
                 if (!best || d < best.d) best = { pos, d };
             }
@@ -51,9 +57,11 @@ export async function patrol(bot, center, radius = 24) {
     const s = stats(bot);
     const post = new Vec3(center.x, center.y, center.z);
 
-    // 1. a hostile inside the area: go and deal with it
+    // 1. a hostile inside the area: go and deal with it, unless hurt and outnumbered
     const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && inArea(e.position, post, radius + 4), 32);
-    if (enemy && !(enemy.name === 'creeper' && bot.health < 10)) {
+    const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e)).length;
+    const hurt = bot.health < 12;
+    if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);
         const killed = await attackEntity(bot, enemy, true);
         if (killed) {
