@@ -77,7 +77,17 @@ export async function patrol(bot, center, radius = 24) {
     const hurt = bot.health < 12;
     if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);
-        const killed = await attackEntity(bot, enemy, true);
+        // counted only when the game says it died: attackEntity also returns once the mob is out of sight, and
+        // counting that made a night's tally read 401 skeletons
+        let died = false;
+        const onDead = entity => { if (entity.id === enemy.id) died = true; };
+        bot.on('entityDead', onDead);
+        try {
+            await attackEntity(bot, enemy, true);
+        } finally {
+            bot.removeListener('entityDead', onDead);
+        }
+        const killed = died;
         if (killed) {
             s.kills[enemy.name] = (s.kills[enemy.name] ?? 0) + 1;
             log(bot, `Defeated ${enemy.name}.`);
