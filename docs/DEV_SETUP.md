@@ -223,8 +223,7 @@ moved on), the low-confidence rate (below the loop's `lowConfidence`, 0.4), resu
 crashes and deaths. The MindServer dashboard shows the current goal, the last decision and the estimated spend
 since the agent started.
 
-One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
-check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
+Most calls in a typical run are the cheap "stop now?" check made while an action runs, not action choices.
 
 ### Nights (`nightRoutine` in `tactical_loop.js`, `skills.shelter`, `daylight.js`)
 
@@ -317,10 +316,9 @@ Option hints (`ChoiceQuestion.hints`) go into Jev's per-option criteria, where i
 "guard": { "maxUsdPerDay": 2, "inputUsdPerMillion": 0.042 }
 ```
 
-Measured from Japan (2026-09-21): ~410 ms p50 for a decision, with occasional 2-4 s spikes; the model itself
-takes ~130 ms and the rest is the gateway, which processes in the US. Each request carries ~300 input tokens of
-fixed overhead, and the tactical loop's action question runs to ~450-550 tokens (~$0.00002 per decision).
-Confidence is meaningful: when the bot kept failing to craft, Jev's confidence in repeating it fell from 1.0
+Measured latency and cost are kept internal: TypeSafe's terms (MCA §2.3(f)) restrict publishing benchmark
+results for Jev. Most of a round trip is the gateway, not the model, and each request carries a fixed overhead
+of input tokens whatever the state, so questions are best asked together. Confidence is meaningful: when the bot kept failing to craft, Jev's confidence in repeating it fell from 1.0
 to 0.5. TypeSafe is in early access and sometimes answers `system_overloaded`; that is retried.
 
 ### Benchmark (`scripts/bench.js`, #17)

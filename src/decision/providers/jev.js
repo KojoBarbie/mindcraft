@@ -3,9 +3,9 @@
 // calibrated probability, without writing any text. Reached through the Vercel AI Gateway's evaluate endpoint,
 // which is not chat-compatible, hence a provider of its own.
 //
-// Measured from Japan on 2026-09-21: the model itself answers in ~130 ms, a whole decision through the gateway
-// (processed in the US) takes ~410 ms p50 with occasional 2-4 s spikes. Every request carries
-// ~300 input tokens of fixed overhead whatever the state, so questions are best asked together.
+// Most of a round trip is the gateway rather than the model, and every request carries a fixed overhead of
+// input tokens whatever the state, so questions are best asked together. (Measured figures are kept internal:
+// TypeSafe's terms restrict publishing benchmark results.)
 import { DecisionError, retryAfterMs } from '../errors.js';
 
 /** @typedef {import('../types.js').DecisionProvider} DecisionProvider */
