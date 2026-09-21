@@ -1,6 +1,24 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { appendFileSync } from 'fs';
+
+// mindcraft fork: with MINDCRAFT_USAGE_LOG set, every answered request appends its token usage and latency there
+// (one JSON object per line), so runs driven by a chat model can be costed like the decision layer (#17).
+function logUsage(model, usage, startedAt) {
+    const path = process.env.MINDCRAFT_USAGE_LOG;
+    if (!path || !usage) return;
+    try {
+        appendFileSync(path, JSON.stringify({
+            t: Date.now(), model,
+            inputTokens: usage.input_tokens ?? usage.prompt_tokens ?? null,
+            cachedTokens: (usage.input_tokens_details ?? usage.prompt_tokens_details)?.cached_tokens ?? 0, // billed at a discount
+            outputTokens: usage.output_tokens ?? usage.completion_tokens ?? null, // reasoning included
+            reasoningTokens: (usage.output_tokens_details ?? usage.completion_tokens_details)?.reasoning_tokens ?? 0,
+            latencyMs: Date.now() - startedAt,
+        }) + '\n');
+    } catch { /* a log that cannot be written must not break the bot */ }
+}
 
 export class GPT {
     static prefix = 'openai';
@@ -30,6 +48,7 @@ export class GPT {
         let model = this.model_name || "gpt-5.4-mini";
 
         let res = null;
+        const startedAt = Date.now();
 
         try {
             console.log('Awaiting openai api response from model', model);
@@ -48,6 +67,7 @@ export class GPT {
                     delete pack.stop;
                 }
                 let completion = await this.openai.chat.completions.create(pack);
+                logUsage(model, completion.usage, startedAt);
                 if (completion.choices[0].finish_reason == 'length')
                     throw new Error('Context length exceeded'); 
                 console.log('Received.');
@@ -67,6 +87,7 @@ export class GPT {
                     ...(this.params || {})
                 });
                 console.log('Received.');
+                logUsage(model, response.usage, startedAt);
                 res = response.output_text;
                 let stop_seq_index = res.indexOf(stop_seq);
                 res = stop_seq_index !== -1 ? res.slice(0, stop_seq_index) : res;

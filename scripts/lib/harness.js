@@ -145,6 +145,8 @@ export async function startHarness(options = {}) {
 
     return {
         name,
+        /** the worker process; the agent runs as its child */
+        pid: child.pid,
 
         /**
          * Send one `!command(args)` and resolve with the text the agent reports back.
@@ -161,6 +163,15 @@ export async function startHarness(options = {}) {
             } finally {
                 busy = false;
             }
+        },
+
+        /**
+         * Say something to the agent without waiting for an answer: for requests whose reply goes to game chat
+         * (the strategist's) rather than back to the harness.
+         * @param {string} message
+         */
+        post(message) {
+            socket.emit('send-message', name, { from: SENDER, message });
         },
 
         stop,
