@@ -2,6 +2,7 @@
 import { DecisionError } from './errors.js';
 import { createMockProvider } from './providers/mock.js';
 import { createRulesProvider } from './providers/rules.js';
+import { createOpenAIProvider } from './providers/openai.js';
 import { resilient } from './resilient.js';
 
 /** @typedef {import('./types.js').DecisionProvider} DecisionProvider */
@@ -18,6 +19,9 @@ import { resilient } from './resilient.js';
 const factories = new Map([
     ['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))],
     ['rules', /** @type {ProviderFactory} */ (options => createRulesProvider(options))],
+    ['openai', /** @type {ProviderFactory} */ (options => createOpenAIProvider(options))],
+    // Ollama speaks the same API on localhost and needs no key
+    ['ollama', /** @type {ProviderFactory} */ (options => createOpenAIProvider({ baseURL: 'http://localhost:11434/v1', model: 'qwen3:4b', ...options, name: `ollama:${options.model ?? 'qwen3:4b'}` }))],
 ]);
 
 /**

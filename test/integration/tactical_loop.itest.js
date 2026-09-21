@@ -8,6 +8,12 @@ import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
 
 const BOT = 'tactical_bot';
+
+function decisionModel() {
+    const spec = process.env.ITEST_DECISION_MODEL;
+    if (!spec) return 'rules';
+    return spec.startsWith('{') || spec.startsWith('[') ? JSON.parse(spec) : spec;
+}
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /** @type {Awaited<ReturnType<typeof startHarness>>} */
@@ -21,7 +27,8 @@ before(async () => {
     harness = await startHarness({
         name: BOT,
         mindserverPort: 8097,
-        profile: { decision_model: 'rules', tactical: { periodMs: 1000 } },
+        // ITEST_DECISION_MODEL=openai (or a JSON spec) runs the same test with a real model deciding
+        profile: { decision_model: decisionModel(), tactical: { periodMs: 1000 }, guard: { maxUsdPerDay: 0.05, inputUsdPerMillion: 0.05 } },
         verbose: process.env.ITEST_VERBOSE === '1',
     });
     await rcon(`clear ${BOT}`);
@@ -34,7 +41,7 @@ after(async () => {
     await harness?.stop();
 });
 
-test('it gets itself a wooden pickaxe, unprompted and with no model', { timeout: 420_000 }, async () => {
+test(`it gets itself a wooden pickaxe, unprompted (decision model: ${JSON.stringify(decisionModel())})`, { timeout: 420_000 }, async () => {
     const deadline = Date.now() + 360_000;
     /** @type {string} */
     let inventory = '';

@@ -185,3 +185,21 @@ each that is ~$0.73/day on Jev; a $1/day cap would cut a busy bot off late in th
 ```
 
 `goals` replaces the default survival curriculum with an explicit list, in priority order.
+### Chat models as decision providers (`providers/openai.js`)
+
+Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions
+become a strict JSON schema, so a choice can only be one of the offered options.
+
+```json
+"decision_model": "openai"                                             // gpt-5-nano, OPENAI_API_KEY
+"decision_model": { "provider": "openai", "model": "gpt-5-mini" }
+"decision_model": { "provider": "ollama", "model": "qwen3:4b" }        // local, no key
+"decision_model": ["jev", "openai", "rules"]                           // fallback order
+```
+
+Two things measured the hard way: gpt-5 models default to `reasoning_effort: "minimal"` here, because at the
+API's default effort a two-word answer takes ~1300 reasoning tokens and ~10 s; and `max_completion_tokens`
+counts reasoning, so a small cap returns an empty answer. The confidence a chat model reports is its own
+estimate (gpt-5-nano says ~0.65 about answers it gets right every time), not a calibrated probability.
+
+`node scripts/try_provider.js <spec> [runs]` asks a real provider a real question and prints latency and tokens.
