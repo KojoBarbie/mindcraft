@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
+import { moveToArena, releaseArena } from '../../scripts/lib/arena.js';
 import { loadJSON } from '../../src/decision/persistence.js';
 
 const BOT = 'night_bot';
@@ -35,17 +36,13 @@ before(async () => {
     await rcon(`clear ${BOT}`);
     await rcon(`effect clear ${BOT}`);
     // flat grass over plenty of dirt, nothing to hide behind
-    const at = `execute at ${BOT} run`;
-    await rcon(`${at} forceload add ~-24 ~-24 ~24 ~24`);
-    await rcon(`${at} fill ~-16 ~-4 ~-16 ~16 ~-1 ~16 minecraft:dirt`);
-    await rcon(`${at} fill ~-16 ~-1 ~-16 ~16 ~-1 ~16 minecraft:grass_block`);
-    await rcon(`${at} fill ~-16 ~ ~-16 ~16 ~6 ~16 minecraft:air`);
+    await moveToArena(BOT, 3, { radius: 16, depth: 4 });
 });
 
 after(async () => {
     await rcon('gamerule doDaylightCycle true').catch(() => {});
     await rcon('kill @e[type=zombie]').catch(() => {});
-    await rcon(`execute at ${BOT} run forceload remove ~-24 ~-24 ~24 ~24`).catch(() => {});
+    await releaseArena(3, 16);
     await rcon('difficulty easy').catch(() => {});
     await rcon('time set day').catch(() => {});
     await harness?.stop();

@@ -7,6 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
+import { moveToArena, releaseArena } from '../../scripts/lib/arena.js';
 import { countOf, inventoryOf } from '../../scripts/lib/poll.js';
 
 const BOT = 'guard_bot';
@@ -37,16 +38,11 @@ before(async () => {
     // Flat ground all round. On the dev world's plateau, exploring (!moveAway) can wedge the pathfinder on a
     // cliff; Mindcraft's unstuck mode then kills the agent after 10 s, and the restart wipes the goal queue, so
     // the nether star would never be given up. That is real (see #11), but it is not what this test is about.
-    const at = `execute at ${BOT} run`;
-    await rcon(`${at} forceload add ~-48 ~-48 ~48 ~48`);
-    for (const [x0, x1] of [[-40, -1], [0, 40]]) {
-        await rcon(`${at} fill ~${x0} ~-1 ~-40 ~${x1} ~-1 ~40 minecraft:grass_block`);
-        await rcon(`${at} fill ~${x0} ~ ~-40 ~${x1} ~4 ~40 minecraft:air`);
-    }
+    await moveToArena(BOT, 1);
 });
 
 after(async () => {
-    await rcon(`execute at ${BOT} run forceload remove ~-48 ~-48 ~48 ~48`).catch(() => {});
+    await releaseArena(1);
     await rcon('difficulty easy').catch(() => {});
     await rcon(`clear ${BOT}`).catch(() => {});
     await harness?.stop();

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { startHarness } from '../../scripts/lib/harness.js';
 import { rcon } from '../../scripts/lib/rcon.js';
+import { moveToArena, releaseArena } from '../../scripts/lib/arena.js';
 import { loadJSON } from '../../src/decision/persistence.js';
 
 const BOT = 'persist_bot';
@@ -40,16 +41,11 @@ before(async () => {
     harness = await start();
     await rcon(`clear ${BOT}`);
     // the same flat arena as guard.itest.js, for the same reason
-    const at = `execute at ${BOT} run`;
-    await rcon(`${at} forceload add ~-48 ~-48 ~48 ~48`);
-    for (const [x0, x1] of [[-40, -1], [0, 40]]) {
-        await rcon(`${at} fill ~${x0} ~-1 ~-40 ~${x1} ~-1 ~40 minecraft:grass_block`);
-        await rcon(`${at} fill ~${x0} ~ ~-40 ~${x1} ~4 ~40 minecraft:air`);
-    }
+    await moveToArena(BOT, 2);
 });
 
 after(async () => {
-    await rcon(`execute at ${BOT} run forceload remove ~-48 ~-48 ~48 ~48`).catch(() => {});
+    await releaseArena(2);
     await rcon('difficulty easy').catch(() => {});
     await rcon(`clear ${BOT}`).catch(() => {});
     await harness?.stop();
