@@ -46,7 +46,7 @@ export async function packSheets(framesDir, count, out) {
 const VERBS = /** @type {Record<string, string>} */ ({
     collectBlocks: '集める', craftRecipe: '作る', smeltItem: '精錬する', searchForBlock: '探しに行く',
     searchForEntity: '探しに行く', moveAway: '歩いて探索する', attack: '倒す', consume: '食べる', equip: '装備する',
-    explore: '歩いて探索する', shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
+    explore: '歩いて探索する', descendTo: '階段を掘って降りる', branchMine: 'ブランチマイニング', shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
     goToBed: 'ベッドで寝る', takeFromChest: 'チェストから取る', putInChest: 'チェストにしまう', givePlayer: '渡す',
     goToPlayer: 'プレイヤーの所へ行く', followPlayer: 'ついて行く', clearFurnace: 'かまどから取り出す', discard: '捨てる',
 });
@@ -57,7 +57,8 @@ export function describeCommand(command) {
     if (!m) return command ?? '';
     const verb = VERBS[m[1]] ?? m[1];
     const parts = m[2].split(',').map(p => p.trim().replace(/^"|"$/g, '')).filter(Boolean);
-    if (m[1] === 'moveAway' || m[1] === 'stay' || m[1] === 'explore') return verb;
+    if (['moveAway', 'stay', 'explore', 'branchMine'].includes(m[1])) return verb;
+    if (m[1] === 'descendTo') return `y=${m[2]} まで${verb}`;
     const [what, n] = parts;
     return what ? `${what}${n ? ` ×${n}` : ''} を${verb}` : verb;
 }
@@ -102,6 +103,8 @@ export function buildTimeline(run) {
                 });
                 break;
             }
+            case 'role': entries.push({ t: r.t, kind: 'decision', title: `役割（${d.role}）: ${describeCommand(d.command)}`, code: d.command, meta: '手順どおり（モデル呼び出しなし）' }); break;
+            case 'found': entries.push({ t: r.t, kind: 'strategy', title: `${d.item} を ${d.count} 個見つけた（計 ${d.total} 個）` }); break;
             case 'dusk': entries.push({ t: r.t, kind: 'night', title: '日没: 作業を止める', detail: String(d) }); break;
             case 'night': entries.push({ t: r.t, kind: 'night', title: typeof d === 'object' && d.action ? `夜: 穴を掘って籠もる（${d.attempt} 回目）` : `夜: ${d}` }); break;
             case 'sheltered': entries.push({ t: r.t, kind: 'night', title: '籠もり完了: 朝まで待機（AI 呼び出しなし）' }); break;
