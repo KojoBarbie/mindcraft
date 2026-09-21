@@ -69,7 +69,11 @@ class Window {
     /** @param {number} at @param {number} amount */
     add(at, amount) {
         if (!(amount > 0)) return;
-        this.entries.push({ at, amount });
+        // One entry per minute: a day of per-call entries runs to megabytes once saved (#11). The entry keeps
+        // its first stamp, so an amount leaves the window up to a minute late, never early.
+        const last = this.entries.at(-1);
+        if (last && at >= last.at && at - last.at < 60_000) last.amount += amount;
+        else this.entries.push({ at, amount });
         this.sum += amount;
     }
 
@@ -269,6 +273,61 @@ export class LoopGuard {
     bannedNow(now = this.now()) {
         for (const [command, until] of this.bans) if (until <= now) this.bans.delete(command);
         return [...this.bans.keys()];
+    }
+
+    /**
+     * Everything worth keeping across a restart. Spending most of all: if a crash wiped the budget windows, a bot
+     * that keeps crashing would never hit its daily cap.
+     */
+    toJSON() {
+        const now = this.now();
+        const windows = /** @type {Record<string, {hour: Window, day: Window}>} */ (this.spent);
+        return {
+            spent: Object.fromEntries(Object.entries(windows).map(([name, w]) => {
+                w.day.total(now); // drop what has aged out before saving
+                return [name, w.day.entries];
+            })),
+            goal: this.goal,
+            stillFor: this.stillFor,
+            bestItems: [...this.bestItems],
+            visited: [...this.visited].slice(-500),
+            bans: [...this.bans],
+        };
+    }
+
+    /**
+     * Take state saved by toJSON(). The file may be old, hand-edited or half-written: anything that does not
+     * look right is skipped rather than trusted.
+     * @param {any} data
+     */
+    restore(data) {
+        if (!data || typeof data !== 'object') return;
+        const now = this.now();
+        const windows = /** @type {Record<string, {hour: Window, day: Window}>} */ (this.spent);
+        for (const [name, entries] of Object.entries(data.spent ?? {})) {
+            if (!windows[name] || !Array.isArray(entries)) continue;
+            for (const entry of entries) {
+                if (!entry || !Number.isFinite(entry.at) || !Number.isFinite(entry.amount) || entry.at > now) continue;
+                windows[name].day.add(entry.at, entry.amount);
+                if (entry.at > now - HOUR) windows[name].hour.add(entry.at, entry.amount);
+            }
+        }
+        if (typeof data.goal === 'string') this.goal = data.goal;
+        if (Number.isInteger(data.stillFor) && data.stillFor >= 0) this.stillFor = data.stillFor;
+        if (Array.isArray(data.bestItems))
+            this.bestItems = new Map(data.bestItems.filter((/** @type {any} */ e) => Array.isArray(e) && typeof e[0] === 'string' && Number.isFinite(e[1])));
+        if (Array.isArray(data.visited)) this.visited = new Set(data.visited.filter((/** @type {any} */ c) => typeof c === 'string'));
+        if (Array.isArray(data.bans))
+            this.bans = new Map(data.bans.filter((/** @type {any} */ e) => Array.isArray(e) && typeof e[0] === 'string' && Number.isFinite(e[1]) && e[1] > now));
+    }
+
+    /**
+     * Ban a command for a while from outside, e.g. the one that was running when the agent last crashed.
+     * @param {string} command
+     * @param {number} [forMs]
+     */
+    ban(command, forMs = this.banForMs) {
+        this.bans.set(command, this.now() + forMs);
     }
 
     /** What has been spent, for logs and for #10. */

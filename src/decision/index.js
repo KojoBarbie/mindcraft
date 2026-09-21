@@ -17,5 +17,6 @@ export { createGameData } from './gamedata.js';
 export { GoalQueue, haveItem, haveTool, haveFood, isDone, goodFood, describeGoal } from './goals.js';
 export { planGoal, focusFor } from './planner.js';
 export { SURVIVAL_CURRICULUM, loadCurriculum } from './curriculum.js';
-export { TacticalLoop, attachTacticalLoop } from './tactical_loop.js';
+export { TacticalLoop, attachTacticalLoop, exitInfo } from './tactical_loop.js';
 export { LoopGuard } from './guard.js';
+export { STATE_VERSION, saveJSON, loadJSON, fingerprint } from './persistence.js';

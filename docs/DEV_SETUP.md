@@ -185,6 +185,25 @@ each that is ~$0.73/day on Jev; a $1/day cap would cut a busy bot off late in th
 ```
 
 `goals` replaces the default survival curriculum with an explicit list, in priority order.
+
+### Surviving a restart (`persistence.js`)
+
+The loop saves its state to `bots/<name>/decision_state.json` (at most every 10 s, before each command it
+fires, and on exit; written aside and renamed, so never half-written): the goal queue with its failures, the
+guard's spend windows, bans and per-goal progress, and the recent actions. A restarted agent picks it up:
+
+| How the agent ended | On the next start |
+|---|---|
+| SIGINT (Mindcraft stopping the agent) | carry on |
+| `cleanKill` for a wedge (`Got stuck…`, `…refused stop…`, `Infinite action loop…`), under 90 s ago | a crash: `restarts` + 1, and the command running then (or ended in the 20 s before) is banned for 5 min |
+| anything else (kick, lost connection, restart from the UI, or a wedge long ago) | carry on |
+
+Budgets and bans always carry over. The goal queue, the guard's per-goal progress and the stuck timers (minus
+the time spent down) carry over only while the profile's `goals`/`curriculum` are unchanged (a fingerprint is
+saved alongside); edit them and the queue is rebuilt. A goal given up is tried again after
+`tactical.retryFailedAfterMs` (30 min). Spend is kept one entry per minute, so the file stays small; delete it
+to start afresh.
+
 ### Chat models as decision providers (`providers/openai.js`)
 
 Any OpenAI-compatible endpoint (OpenAI, Ollama, Groq, vLLM) can answer the same typed questions: the questions
@@ -229,7 +248,7 @@ Found by running the bot for real; they affect any Mindcraft bot, not just this 
 - **Reflex modes kill the process.** `unstuck` (src/agent/modes.js) arms a 10 s timer while freeing the bot and
   exits the process if it is still stuck; `ActionManager.stop()` does the same for an action that will not stop
   (a pathfinder wedged on a cliff). Mindcraft then restarts the agent. The tactical loop therefore never
-  interrupts a `mode:*` action, only commands it fired itself. A restart still loses in-memory state (#11).
+  interrupts a `mode:*` action, only commands it fired itself. The decision state survives a restart (see above).
 - **x/z become NaN.** Occasionally the bot's position turns NaN on two axes while y and velocity are fine;
   the next movement packet gets it kicked ("Invalid move player packet received"). `patches/mineflayer+4.33.0.patch`
   refuses to send non-finite movement packets and restores only the broken axes. The source is not found yet.
