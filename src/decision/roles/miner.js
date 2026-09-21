@@ -62,8 +62,16 @@ export function createMinerRole(options = {}) {
             // Torches and food are stocked up before going down: underground there are no trees or animals,
             // and a miner that ran out of torches at y=54 went looking for logs in the dark.
             const onSurface = snapshot.pos.y > 50;
+            // Pickaxes wear out (an iron one lasts about 250 blocks: one trip down). Before going down, carry sticks
+            // and a crafting table so a new one can be made below: stone at once from the cobblestone dug, then
+            // iron again from the ore met in the tunnels.
             const short = [];
-            if (!PICKAXES.some(p => (inv[p] ?? 0) > 0)) short.push(() => ensureGoal(loop.goals, haveTool('iron', 'pickaxe'), 1000));
+            if (!PICKAXES.some(p => (inv[p] ?? 0) > 0)) {
+                if (!onSurface && !(inv.stone_pickaxe > 0)) short.push(() => ensureGoal(loop.goals, haveTool('stone', 'pickaxe'), 1010));
+                short.push(() => ensureGoal(loop.goals, haveTool('iron', 'pickaxe'), 1000));
+            }
+            if (onSurface && (inv.stick ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('stick', 8), 985));
+            if (onSurface && !(inv.crafting_table > 0)) short.push(() => ensureGoal(loop.goals, haveItem('crafting_table', 1), 984));
             if (onSurface && (inv.torch ?? 0) < 16) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
             if (onSurface && food < 6) short.push(() => ensureGoal(loop.goals, haveFood(8), 995));
             if (short.length > 0) {

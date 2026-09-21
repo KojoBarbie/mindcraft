@@ -57,6 +57,17 @@ export async function patrol(bot, center, radius = 24) {
     const s = stats(bot);
     const post = new Vec3(center.x, center.y, center.z);
 
+    // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
+    // night with no torch placed, because there was always some mob in the area to go after)
+    const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 10);
+    if (!close && bot.inventory.items().some(item => item.name === 'torch')) {
+        const spot = darkSpot(bot, post, radius);
+        if (spot && await placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
+            s.torches++;
+            return `lit ${spot}`;
+        }
+    }
+
     // 1. a hostile inside the area: go and deal with it, unless hurt and outnumbered
     const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && inArea(e.position, post, radius + 4), 32);
     const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e)).length;
