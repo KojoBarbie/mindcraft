@@ -280,7 +280,8 @@ export class TacticalLoop {
             this.dead = true;
             this.sheltered = null; // respawning elsewhere: that hole is not its to climb out of
             this.pendingCommand = '';
-            this.onEvent({ type: 'death' });
+            const reopened = this.goals.reopenDone();
+            this.onEvent({ type: 'death', detail: reopened > 0 ? { reopenedGoals: reopened } : undefined });
         });
         on('respawn', () => {
             this.dead = false;

@@ -167,6 +167,23 @@ export class GoalQueue {
     }
 
     /**
+     * Death drops the inventory, so goals met by holding things are no longer met. Put them back in the queue;
+     * current() marks any that still hold as done again straight away. Without this a soak run that had made
+     * every stone tool died once and went on to "16 torches" with nothing in its hands.
+     * @returns {number} how many were reopened
+     */
+    reopenDone() {
+        let reopened = 0;
+        for (const queued of this.goals) {
+            if (queued.status !== 'done') continue;
+            queued.status = 'pending';
+            queued.failures = 0;
+            reopened++;
+        }
+        return reopened;
+    }
+
+    /**
      * Move a goal up or down the queue.
      * @param {number} id
      * @param {number} priority

@@ -762,4 +762,16 @@ test('isNight: the boundaries', async () => {
     assert.equal(isNight(NIGHT_START), true);
     assert.equal(isNight(NIGHT_END - 1), true);
     assert.equal(isNight(NIGHT_END), false);
+test('after a death, goals that were met by holding things are back in the queue', async () => {
+    const agent = fakeAgent({ inventory: { wooden_pickaxe: 1 } });
+    const { loop, queue } = loopFor(agent, {}, [haveTool('wooden', 'pickaxe'), haveTool('stone', 'pickaxe')]);
+    loop.start();
+    await loop.decide();
+    assert.equal(queue.toJSON().goals[0].status, 'done');
+    agent.bot.inventory.items = () => [];
+    agent.bot.emit('death');
+    assert.equal(queue.toJSON().goals[0].status, 'pending');
+    agent.bot.emit('respawn');
+    assert.equal(queue.current(loop.rawSnapshot(), data.isFood)?.id, queue.toJSON().goals[0].id, 'the wooden pickaxe comes first again');
+    await loop.stop();
 });
