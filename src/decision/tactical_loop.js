@@ -7,12 +7,13 @@
 // Two things keep it responsive. A command is fired without waiting for it to finish, so the loop keeps
 // ticking while the bot digs; and while something is running the only question asked is "should this stop?".
 import { chooseCommand } from './choose.js';
-import { listActions } from './catalog.js';
+import { buildCommand, listActions, listQuantities, maxQuantity } from './catalog.js';
 import { createKnowledge } from './knowledge.js';
 import { describeGoal, isDone } from './goals.js';
 import { focusFor, planGoal } from './planner.js';
 import { compressState } from './state.js';
 import { takeSnapshot } from './snapshot.js';
+import { LoopGuard, metered } from './guard.js';
 
 /** @typedef {import('./snapshot.js').Snapshot} Snapshot */
 /** @typedef {import('./snapshot.js').RecentAction} RecentAction */
@@ -59,7 +60,24 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {(info: {chosen: import('./choose.js').ChosenCommand, state: unknown, goal: string}) => void} [onLowConfidence]
  * @property {(event: {type: string, detail?: unknown}) => void} [onEvent] for logging and, later, telemetry
  * @property {(command: string) => Promise<string>} [execute] injected in tests; defaults to Mindcraft's executeCommand
+ * @property {LoopGuard} [guard] stall and repeat detection and budgets; a default one if omitted
  */
+
+/**
+ * The command a planned action would issue, to check it against the guard's bans before paying to ask.
+ * @param {import('./catalog.js').CatalogContext} ctx
+ * @param {string} id
+ * @param {{target?: string, quantity?: number}} preset
+ */
+function buildPlannedCommand(ctx, id, preset) {
+    try {
+        const quantities = listQuantities(ctx, id, preset.target);
+        const quantity = quantities.length > 0 ? Math.min(preset.quantity ?? quantities[0], maxQuantity(ctx, id, preset.target)) : undefined;
+        return buildCommand(ctx, { id, target: preset.target, quantity });
+    } catch {
+        return '';
+    }
+}
 
 export class TacticalLoop {
     /**
@@ -71,7 +89,6 @@ export class TacticalLoop {
      */
     constructor(agent, provider, goals, data, options = {}) {
         this.agent = agent;
-        this.provider = provider;
         this.goals = goals;
         this.data = data;
         this.periodMs = options.periodMs ?? 1500;
@@ -85,6 +102,11 @@ export class TacticalLoop {
         this.onLowConfidence = options.onLowConfidence;
         this.onEvent = options.onEvent ?? (() => {});
         this.execute = options.execute;
+        this.guard = options.guard ?? new LoopGuard();
+        // Every call through the loop is charged to the guard, retries and failures included.
+        this.provider = metered(provider, this.guard);
+        /** @type {number | null} the goal the guard's counters are about */
+        this.guardGoalId = null;
 
         this.running = false;
         this.deciding = false;
@@ -107,6 +129,7 @@ export class TacticalLoop {
         this.epoch = 0;
         /** @type {Map<number, number>} goal id -> since when it has had no workable plan */
         this.stuckSince = new Map();
+        this.heldUntil = 0;
     }
 
     start() {
@@ -139,7 +162,16 @@ export class TacticalLoop {
         if (!this.running) return;
         if (this.timer) clearTimeout(this.timer);
         const since = Date.now() - this.lastDecisionAt;
-        this.timer = setTimeout(() => this.tick(), Math.max(delayMs, this.minGapMs - since));
+        const held = Math.max(0, this.heldUntil - Date.now());
+        this.timer = setTimeout(() => this.tick(), Math.max(delayMs, this.minGapMs - since, held));
+    }
+
+    /**
+     * Do not tick again before `ms` from now, whatever wakes the loop in between. Used while a budget is used up.
+     * @param {number} ms
+     */
+    holdUntil(ms) {
+        this.heldUntil = Date.now() + ms;
     }
 
     bindEvents() {
@@ -226,8 +258,6 @@ export class TacticalLoop {
             this.onEvent({ type: 'error', detail: `stop failed: ${error instanceof Error ? error.message : String(error)}` });
         } finally {
             this.stopping = false;
-        // Bumped by stop(). Anything that was waiting on an answer when the loop stopped must not act on it.
-        this.epoch = 0;
         }
     }
 
@@ -254,12 +284,24 @@ export class TacticalLoop {
             return;
         }
 
+        // Budgets apply to every provider call, the cheap interrupt question included.
+        const paused = this.guard.overBudget();
+        if (paused) {
+            this.onEvent({ type: 'paused', detail: { reason: paused.reason, retryAfterMs: paused.retryAfterMs } });
+            this.holdUntil(paused.retryAfterMs ?? this.periodMs);
+            return;
+        }
+
         const queued = this.goals.current(this.rawSnapshot(), this.data.isFood);
         if (!queued) {
             this.onEvent({ type: 'idle', detail: 'no goals left' });
             return;
         }
         const goalText = describeGoal(queued.goal);
+        if (queued.id !== this.guardGoalId) {
+            this.guard.reset(); // a new goal starts with a clean slate
+            this.guardGoalId = queued.id;
+        }
 
         // Something is already running: the only question worth asking is whether to stop it. `pendingCommand`
         // matters as much as isIdle(): a command that has been fired but has not reached the action manager
@@ -270,9 +312,18 @@ export class TacticalLoop {
         }
 
         const snapshot = this.snapshotFor(goalText);
+        const verdict = this.guard.check({ inventory: snapshot.inventory, pos: snapshot.pos, goal: goalText });
+        if (verdict.action === 'shake' && this.guard.shouldGiveUp()) {
+            // Commands keep "succeeding" and nothing changes: the #810 failure mode. Move on.
+            this.goals.giveUp(queued.id);
+            this.onEvent({ type: 'gave up', detail: { goal: goalText, reason: verdict.reason } });
+            this.guard.reset();
+            this.guardGoalId = null;
+            return;
+        }
         const plan = planGoal(queued.goal, snapshot, this.data);
         const focus = plan.steps.length > 0 ? focusFor(plan.steps[0], snapshot) : null;
-        this.noteStuck(queued.id, plan.unresolved, goalText);
+        if (this.noteStuck(queued.id, plan.unresolved, goalText)) return; // given up: the next tick takes the next goal
 
         // When the planned target is out of sight, offer "go and look for it" in place of the step itself.
         const searching = focus && !focus.inSight ? SEARCH_FOR[/** @type {keyof typeof SEARCH_FOR} */ (focus.action)] : undefined;
@@ -285,19 +336,37 @@ export class TacticalLoop {
         };
         const possible = new Set(listActions(ctx).map(action => action.id));
         const wanted = searching ?? (focus && focus.inSight ? focus.action : null);
-        const planned = wanted && possible.has(wanted) ? wanted : null;
-        const only = [...new Set([planned, ...SITUATIONAL].filter(id => id && possible.has(id)))];
+        // Shaking: the plan has been followed for a while with nothing to show for it, so for one decision it
+        // is not on offer and the model has to try something else.
+        const shaking = verdict.action === 'shake';
+        const banned = new Set(verdict.banned ?? []);
+        const presetFor = /** @param {string} id */ id => ({ target: focus?.target, quantity: searching ? undefined : focus?.quantity });
+        let planned = wanted && possible.has(wanted) && !shaking ? wanted : null;
+        // A banned planned command is dropped before asking, not after: a paid call that picks it would be wasted.
+        if (planned && banned.has(buildPlannedCommand(ctx, planned, presetFor(planned)))) planned = null;
+        let only = [...new Set([planned, ...SITUATIONAL].filter(id => id && possible.has(id)))];
+        if (shaking) this.onEvent({ type: 'shake', detail: { goal: goalText, reason: verdict.reason } });
         if (only.length === 0) return;
 
         const state = compressState(snapshot, { view: 'tactical' });
         if (focus) state.next = searching ? `find ${focus.target} first, then ${focus.text}` : focus.text;
         if (planned) state.plan_action = planned;
+        if (shaking) state.stuck = verdict.reason;
 
         const before = this.fingerprint(snapshot);
-        const chosen = await chooseCommand(this.provider, ctx, state, {
-            only: /** @type {string[]} */ (only),
-            preset: planned && focus ? { [planned]: { target: focus.target, quantity: searching ? undefined : focus.quantity } } : undefined,
-        });
+        const preset = planned && focus ? { [planned]: presetFor(planned) } : undefined;
+        let chosen = await chooseCommand(this.provider, ctx, state, { only: /** @type {string[]} */ (only), preset });
+        // The model can still land on a banned command through a situational action. Take that action off
+        // the table and ask once more; if that is banned too, the round was fruitless and counts as such.
+        if (banned.has(chosen.command)) {
+            this.onEvent({ type: 'banned pick', detail: chosen.command });
+            only = only.filter(id => id !== chosen.action);
+            if (only.length > 0) chosen = await chooseCommand(this.provider, ctx, state, { only: /** @type {string[]} */ (only) });
+            if (only.length === 0 || banned.has(chosen.command)) {
+                this.guard.recordNoop();
+                return;
+            }
+        }
 
         if (epoch !== this.epoch) return;
         if (this.fingerprint(this.rawSnapshot()) !== before) {
@@ -309,6 +378,8 @@ export class TacticalLoop {
 
         this.lastDecisionAt = Date.now();
         this.onEvent({ type: 'decision', detail: { goal: goalText, ...chosen } });
+        const repeat = this.guard.recordDecision(chosen.command);
+        if (repeat.banned) this.onEvent({ type: 'banned', detail: { command: repeat.banned, repeats: repeat.repeats } });
         // While a goal has no workable plan the bot is only casting about for the missing piece. Letting that
         // count as progress would reset the counter that eventually gives the goal up.
         this.run(chosen.command, queued.id, this.progressSignature(snapshot), epoch, plan.unresolved.length === 0);
@@ -321,22 +392,24 @@ export class TacticalLoop {
      * @param {number} goalId
      * @param {string[]} unresolved
      * @param {string} goalText
+     * @returns {boolean} true if the goal has now been given up
      */
     noteStuck(goalId, unresolved, goalText) {
         if (unresolved.length === 0) {
             this.stuckSince.delete(goalId);
-            return;
+            return false;
         }
         const since = this.stuckSince.get(goalId);
         if (since === undefined) {
             this.stuckSince.set(goalId, Date.now());
             this.onEvent({ type: 'unresolved', detail: { goal: goalText, items: unresolved } });
-            return;
+            return false;
         }
-        if (Date.now() - since < this.stuckGoalMs) return;
+        if (Date.now() - since < this.stuckGoalMs) return false;
         this.stuckSince.delete(goalId);
         const givenUp = this.goals.reportFailure(goalId);
         this.onEvent({ type: 'stuck', detail: { goal: goalText, items: unresolved, givenUp } });
+        return givenUp;
     }
 
     /**
@@ -441,7 +514,9 @@ export class TacticalLoop {
  *   "decision_model": "rules",                       // no API key needed
  *   "decision_options": {"timeoutMs": 2000},
  *   "tactical": {"periodMs": 1500, "pauseWhenAlone": false},
- *   "curriculum": "none"                              // omit for the default survival ladder
+ *   "guard": {"maxUsdPerDay": 1, "inputUsdPerMillion": 0.042, "stallAfter": 6, "failAfter": 12},
+ *   "goals": [{"type": "have_item", "item": "torch", "count": 16}],   // or omit for the survival ladder
+ *   "curriculum": "none"                              // no goals at all
  *
  * @param {any} agent
  * @returns {Promise<TacticalLoop | null>}
@@ -457,10 +532,20 @@ export async function attachTacticalLoop(agent) {
     if (!provider) return null;
 
     const goals = new GoalQueue();
-    if (profile.curriculum !== 'none') loadCurriculum(goals);
+    if (Array.isArray(profile.goals)) {
+        // explicit goals, in priority order: what a server operator asks the bot to do
+        const known = ['have_item', 'have_tool', 'have_food'];
+        profile.goals.forEach((/** @type {any} */ goal, /** @type {number} */ index) => {
+            if (goal && known.includes(goal.type)) goals.add(goal, { priority: profile.goals.length - index });
+            else console.warn(`[tactical:${agent.name}] ignoring goal ${JSON.stringify(goal)}: unknown type`);
+        });
+    } else if (profile.curriculum !== 'none') {
+        loadCurriculum(goals);
+    }
 
     const loop = new TacticalLoop(agent, provider, goals, createGameData(agent.bot.registry), {
         ...profile.tactical,
+        guard: new LoopGuard(profile.guard ?? {}),
         onEvent: event => console.log(`[tactical:${agent.name}]`, event.type, event.detail === undefined ? '' : JSON.stringify(event.detail)),
     });
     loop.start();

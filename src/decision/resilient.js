@@ -160,6 +160,7 @@ export function resilient(providers, options = {}) {
                         return {
                             answers,
                             inputTokens: response.inputTokens ?? null,
+                            outputTokens: response.outputTokens ?? null,
                             provider: provider.name,
                             latencyMs: now() - startedAt,
                             attempts,
@@ -173,7 +174,7 @@ export function resilient(providers, options = {}) {
                 }
                 failures.push({ provider: provider.name, error: lastError });
             }
-            throw new AllProvidersFailedError(failures);
+            throw new AllProvidersFailedError(failures, attempts);
         },
     };
 }

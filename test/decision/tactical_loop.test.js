@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import mcdata from 'minecraft-data';
-import { GoalQueue, TacticalLoop, createGameData, createRulesProvider, haveItem, haveTool, resilient } from '../../src/decision/index.js';
+import { GoalQueue, LoopGuard, TacticalLoop, createGameData, createRulesProvider, haveItem, haveTool, resilient } from '../../src/decision/index.js';
 
 const registry = mcdata('1.21.6');
 const data = createGameData(registry);
@@ -283,17 +283,22 @@ test('when every goal is met the loop stops deciding instead of flailing', async
 
 test('start/stop: ticks run on a timer and on events, and stop leaves no timers behind', async () => {
     const agent = fakeAgent({ world: ['oak_log'] });
-    const { loop } = loopFor(agent, { periodMs: 15 });
+    // In this fake world nothing ever changes, so a real guard would (rightly) ban the repeated command and
+    // give the goal up. This test is about timing only.
+    const lenient = new LoopGuard({ repeatLimit: 1e9, stallAfter: 1e9, failAfter: 1e9 });
+    const { loop } = loopFor(agent, { periodMs: 15, guard: lenient });
     loop.start();
-    await wait(60);
-    const onTimer = agent.commands.length;
-    assert.ok(onTimer >= 2, `only ${onTimer} ticks`);
+    try {
+        await wait(60);
+        const onTimer = agent.commands.length;
+        assert.ok(onTimer >= 2, `only ${onTimer} ticks`);
 
-    agent.bot.emit('idle'); // an action finished: decide at once rather than waiting out the period
-    await wait(5);
-    assert.ok(agent.commands.length > onTimer);
-
-    await loop.stop();
+        agent.bot.emit('idle'); // an action finished: decide at once rather than waiting out the period
+        await wait(5);
+        assert.ok(agent.commands.length > onTimer);
+    } finally {
+        await loop.stop();
+    }
     const afterStop = agent.commands.length;
     await wait(50);
     assert.equal(agent.commands.length, afterStop);
@@ -363,8 +368,11 @@ test('a command that never returns does not wedge the loop for ever', async () =
     });
     agent.actions.stop = () => { stopped++; return Promise.resolve(); };
     loop.start();
-    await wait(200);
-    await loop.stop();
+    try {
+        await wait(200);
+    } finally {
+        await loop.stop();
+    }
     assert.ok(events.some(event => event.type === 'command timeout'));
     assert.ok(stopped >= 1);
     assert.ok(agent.commands.length >= 2, 'the loop went on to decide again');
@@ -411,6 +419,102 @@ test('a command that lands after the loop was stopped is not recorded against th
     await tick();
     assert.equal(queue.goals[0].failures, 0);
     assert.deepEqual(loop.recent, []);
+});
+
+test('guard: a spent budget stops every provider call, the interrupt question included', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    let calls = 0;
+    const counting = { decide: (/** @type {any} */ request) => { calls++; return resilient([createRulesProvider()]).decide(request); } };
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    /** @type {{type: string, detail?: any}[]} */
+    const events = [];
+    const loop = new TacticalLoop(agent, counting, queue, data, {
+        guard: new LoopGuard({ maxDecisionsPerHour: 2 }), settleMs: 0,
+        execute: command => { agent.commands.push(command); return Promise.resolve('Collected 3 oak_log.'); },
+        onEvent: event => events.push(event),
+    });
+    await loop.decide();
+    await tick();
+    await loop.decide();
+    await tick();
+    const spent = calls;
+    await loop.decide();                // the idle path is refused...
+    agent.actions.executing = true;
+    agent.actions.currentActionLabel = 'action:collectBlocks';
+    await loop.decide();                // ...and so is the "should this stop?" path
+    assert.equal(calls, spent);
+    const paused = events.filter(event => event.type === 'paused');
+    assert.equal(paused.length, 2);
+    assert.match(paused[0].detail.reason, /decisions budget/);
+    assert.ok(loop.heldUntil > Date.now()); // and the loop will not spin while it waits
+});
+
+test('guard: commands that keep "succeeding" with nothing changing make the loop give the goal up and move on', async () => {
+    // the #810 failure: every command reports success, the world never changes, the bill keeps growing
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, queue, events } = loopFor(agent, {
+        guard: new LoopGuard({ stallAfter: 2, failAfter: 4, repeatLimit: 1e9 }),
+        execute: command => { agent.commands.push(command); return Promise.resolve('Collected 3 oak_log.'); },
+    }, [haveTool('wooden', 'pickaxe'), haveItem('oak_log', 1)]);
+    for (let i = 0; i < 8; i++) {
+        await loop.decide();
+        await tick();
+    }
+    assert.equal(queue.goals[0].status, 'failed');
+    assert.ok(events.some(event => event.type === 'shake'));
+    assert.ok(events.some(event => event.type === 'gave up'));
+    assert.ok(events.filter(event => event.type === 'decision').at(-1)?.detail.goal.includes('oak_log'), 'moved on to the next goal');
+});
+
+test('guard: while shaking, the planned action is not on offer', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = loopFor(agent, { guard: new LoopGuard({ stallAfter: 1, failAfter: 99, repeatLimit: 1e9 }) });
+    await loop.decide();
+    await tick();
+    assert.equal(agent.commands[0], '!collectBlocks("oak_log", 3)');
+    await loop.decide();
+    await tick();
+    assert.ok(events.some(event => event.type === 'shake'));
+    assert.notEqual(agent.commands[1], '!collectBlocks("oak_log", 3)');
+});
+
+test('guard: a command repeated to no effect is banned and not fired again', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = loopFor(agent, { guard: new LoopGuard({ repeatLimit: 2, stallAfter: 99, failAfter: 99 }) });
+    for (let i = 0; i < 4; i++) {
+        await loop.decide();
+        await tick();
+    }
+    const collects = agent.commands.filter(command => command === '!collectBlocks("oak_log", 3)').length;
+    assert.equal(collects, 2);
+    assert.ok(events.some(event => event.type === 'banned'));
+});
+
+test('guard: a banned planned command costs no paid call, and every call made is charged', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    /** @type {string[][]} */
+    const offered = [];
+    const provider = {
+        decide: (/** @type {any} */ request) => {
+            offered.push(request.questions[0].options ?? []);
+            return resilient([createRulesProvider()]).decide(request);
+        },
+    };
+    const guard = new LoopGuard({ repeatLimit: 2, stallAfter: 99, failAfter: 99 });
+    const queue = new GoalQueue();
+    queue.add(haveTool('wooden', 'pickaxe'));
+    const loop = new TacticalLoop(agent, provider, queue, data, {
+        guard, execute: command => { agent.commands.push(command); return Promise.resolve('ok'); },
+    });
+    for (let i = 0; i < 3; i++) {
+        await loop.decide();
+        await tick();
+    }
+    // the first two rounds offered the planned collect; once it was banned it was no longer offered at all
+    assert.ok(offered[0].includes('collect_blocks') && offered[1].includes('collect_blocks'));
+    assert.ok(!offered.at(-1)?.includes('collect_blocks'), JSON.stringify(offered.at(-1)));
+    assert.equal(guard.usage().decisions.hour, offered.length); // each call was charged exactly once
 });
 
 test('a provider that throws does not kill the loop', async () => {

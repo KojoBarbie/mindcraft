@@ -34,8 +34,11 @@ export class DecisionError extends Error {
 
 /** Thrown when every provider in the chain has failed. `errors` holds the last error of each provider. */
 export class AllProvidersFailedError extends DecisionError {
-    /** @param {{provider: string, error: unknown}[]} errors */
-    constructor(errors) {
+    /**
+     * @param {{provider: string, error: unknown}[]} errors
+     * @param {number} [attempts] requests sent before giving up; they may be billed even though they failed
+     */
+    constructor(errors, attempts = errors.length) {
         const detail = errors
             .map(e => `${e.provider}: ${e.error instanceof Error ? e.error.message : String(e.error)}`)
             .join('; ');
@@ -44,6 +47,7 @@ export class AllProvidersFailedError extends DecisionError {
         super(`All decision providers failed (${detail})`, { retryable });
         this.name = 'AllProvidersFailedError';
         this.errors = errors;
+        this.attempts = attempts;
         /** HTTP statuses seen, e.g. to tell a rate limit (429) from a bad key (401). */
         this.statuses = errors.flatMap(e => (e.error instanceof DecisionError && e.error.status !== undefined ? [e.error.status] : []));
         /** Longest wait any provider asked for. */
