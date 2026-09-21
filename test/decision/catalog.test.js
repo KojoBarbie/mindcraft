@@ -165,7 +165,7 @@ test('commands are built in Mindcraft syntax', () => {
     assert.equal(buildCommand(c, { id: 'give_to_player', target: 'cobblestone', quantity: 16 }), '!givePlayer("tomo", "cobblestone", 16)');
     assert.equal(buildCommand(c, { id: 'store_in_chest', target: 'cobblestone', quantity: 40 }), '!putInChest("cobblestone", 40)');
     assert.equal(buildCommand(c, { id: 'place_block', target: 'crafting_table' }), '!placeHere("crafting_table")');
-    assert.equal(buildCommand(c, { id: 'explore', quantity: 32 }), '!moveAway(32)');
+    assert.equal(buildCommand(c, { id: 'explore', quantity: 32 }), '!explore(32)');
     assert.equal(buildCommand(c, { id: 'wait' }), '!stay(3)');
 });
 

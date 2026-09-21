@@ -341,7 +341,7 @@ export class TacticalLoop {
         if (Object.entries(now.inventory).some(([name, count]) => count > (before.inventory[name] ?? 0))) return true;
         const verb = /^!(\w+)/.exec(command)?.[1] ?? '';
         if (verb === 'consume' && (now.food > before.food || now.hp > before.hp)) return true;
-        const moving = /^(moveAway|searchForBlock|searchForEntity|goToSurface|goToPlayer|followPlayer|goToCoordinates|goToRememberedPlace)$/.test(verb);
+        const moving = /^(moveAway|explore|searchForBlock|searchForEntity|goToSurface|goToPlayer|followPlayer|goToCoordinates|goToRememberedPlace)$/.test(verb);
         return (moving || !verb) && Math.hypot(now.pos.x - before.pos.x, now.pos.z - before.pos.z) > 3;
     }
 

@@ -1435,6 +1435,38 @@ export async function followPlayer(bot, username, distance=4) {
 }
 
 
+export async function explore(bot, distance = 32) {
+    /**
+     * mindcraft fork: walk somewhere new, keeping a heading between calls so that exploring goes somewhere.
+     * moveAway picks any direction each time, and a bot looking for animals walked back and forth between the
+     * same two spots. A blocked heading turns a quarter to the left and tries again.
+     * @param {MinecraftBot} bot
+     * @param {number} distance how far to go this time
+     * @returns {Promise<boolean>} true if it got somewhere
+     **/
+    bot.exploreHeading ??= Math.random() * 2 * Math.PI;
+    const start = bot.entity.position.clone();
+    for (let turn = 0; turn < 4; turn++) {
+        if (bot.interrupt_code) return false;
+        const heading = bot.exploreHeading;
+        const x = Math.round(start.x + Math.cos(heading) * distance);
+        const z = Math.round(start.z + Math.sin(heading) * distance);
+        try {
+            await goToGoal(bot, new pf.goals.GoalNearXZ(x, z, 4));
+        } catch (err) {
+            if (!/NoPath|Timeout/i.test(String(err))) throw err;
+        }
+        const moved = bot.entity.position.distanceTo(start);
+        if (moved >= distance / 2) {
+            log(bot, `Explored ${Math.round(moved)} blocks towards ${x}, ${z}; now at ${bot.entity.position.floored()}.`);
+            return true;
+        }
+        bot.exploreHeading = heading + Math.PI / 2;
+    }
+    log(bot, `Could not explore from ${start.floored()}: every direction is blocked.`);
+    return false;
+}
+
 export async function moveAway(bot, distance) {
     /**
      * Move away from current position in any direction.
