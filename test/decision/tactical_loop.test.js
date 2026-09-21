@@ -602,6 +602,9 @@ const silent = { name: 'silent', decide: () => { throw new Error('the night rout
 /** @param {ReturnType<typeof fakeAgent>} agent @param {Partial<import('../../src/decision/tactical_loop.js').TacticalLoopOptions>} [options] */
 function nightLoop(agent, options = {}) {
     agent.bot.time.timeOfDay = 14_000;
+    // the loop needs a block position to dig from and to check for cover
+    const feet = { x: 0, y: 64, z: 0, offset: (/** @type {number} */ dx, /** @type {number} */ dy, /** @type {number} */ dz) => ({ x: dx, y: 64 + dy, z: dz }) };
+    Object.assign(agent.bot.entity.position, { floored: () => feet });
     const queue = new GoalQueue();
     queue.add(haveTool('wooden', 'pickaxe'));
     /** @type {{type: string, detail?: any}[]} */
@@ -621,16 +624,8 @@ test('night: out in the open it digs in, by rule, without asking any model', asy
     loop.enclosed = () => false;
     await loop.decide();
     assert.deepEqual(agent.commands, ['!shelter()']);
-    assert.ok(events.some(e => e.type === 'night' && e.detail === 'digging in'));
+    assert.ok(events.some(e => e.type === 'night' && e.detail?.action === 'digging in'));
     assert.ok(!events.some(e => e.type === 'error'));
-});
-
-test('night: with a bed in sight it sleeps instead', async () => {
-    const agent = fakeAgent({ world: ['red_bed'] });
-    const { loop } = nightLoop(agent);
-    loop.enclosed = () => false;
-    await loop.decide();
-    assert.deepEqual(agent.commands, ['!goToBed()']);
 });
 
 test('night: once boxed in it waits, deciding nothing and calling nothing', async () => {
@@ -662,12 +657,12 @@ test('dawn: it climbs out once, and then the day goes on as usual', async () => 
     const { loop, events } = nightLoop(agent);
     loop.enclosed = () => true;
     await loop.decide();
-    assert.equal(loop.sheltered, true);
+    assert.equal(loop.sheltered?.y, 64);
     agent.bot.time.timeOfDay = 23_500;
     await loop.decide();
     assert.deepEqual(agent.commands, ['!goToSurface()']);
     assert.ok(events.some(e => e.type === 'dawn'));
-    assert.equal(loop.sheltered, false);
+    assert.equal(loop.sheltered, null);
 });
 
 test('nightShelter: false leaves the night to the model', async () => {
@@ -688,4 +683,83 @@ test('night: after digging in it says it is sheltered, even though it was marked
     boxed = true;
     await loop.decide();
     assert.ok(events.some(e => e.type === 'sheltered'));
+});
+
+test('night: three failed shelters and it gives up for the night, carrying on as by day; retries are spaced', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop, events } = nightLoop(agent);
+    loop.enclosed = () => false;
+    await loop.decide();
+    await tick(); await tick();
+    await loop.decide(); // too soon to try again
+    assert.equal(agent.commands.length, 1);
+    for (let i = 0; i < 2; i++) {
+        loop.nightRetryAt = 0;
+        await loop.decide();
+        await tick(); await tick();
+    }
+    assert.equal(agent.commands.length, 3);
+    loop.nightRetryAt = 0;
+    assert.equal(loop.nightRoutine(loop.epoch), false);
+    assert.ok(events.some(e => e.type === 'night' && /could not make a shelter/.test(e.detail)));
+});
+
+test('dusk: a reflex that is running is never stopped, only a command the loop fired', async () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    let stops = 0;
+    agent.actions.stop = () => { stops++; return Promise.resolve(); };
+    const { loop } = nightLoop(agent);
+    loop.pendingCommand = '!collectBlocks("oak_log", 3)';
+    agent.actions.currentActionLabel = 'mode:self_defense';
+    await loop.decide();
+    assert.equal(stops, 0);
+});
+
+test('night: underground, in the Nether, or past the longest real night, it steps aside', async () => {
+    const covered = fakeAgent({ world: ['oak_log'] });
+    const { loop } = nightLoop(covered);
+    loop.enclosed = () => false;
+    covered.bot.blockAt = () => ({ name: 'stone', boundingBox: 'block' });
+    assert.equal(loop.nightRoutine(loop.epoch), false, 'rock overhead: mining goes on');
+
+    const nether = fakeAgent({ world: ['oak_log'] });
+    const n = nightLoop(nether);
+    nether.bot.game.dimension = 'the_nether';
+    assert.equal(n.loop.nightRoutine(n.loop.epoch), false);
+
+    const frozen = fakeAgent({ world: ['oak_log'] });
+    const f = nightLoop(frozen, { nightMaxMs: 10 });
+    f.loop.enclosed = () => true;
+    assert.equal(f.loop.nightRoutine(f.loop.epoch), true);
+    await wait(20);
+    assert.equal(f.loop.nightRoutine(f.loop.epoch), false, 'a night that never ends (daylight cycle off) is not waited out for ever');
+});
+
+test('dawn: a bot that moved away from its shelter in the night is not sent to climb out of it', () => {
+    const agent = fakeAgent({ world: ['oak_log'] });
+    const { loop } = nightLoop(agent);
+    loop.sheltered = { y: 40, at: Date.now() };
+    agent.bot.time.timeOfDay = 1000;
+    assert.equal(loop.nightRoutine(loop.epoch), false, 'the day goes on');
+    assert.ok(!agent.commands.includes('!goToSurface()'));
+    assert.equal(loop.sheltered, null);
+});
+
+test('restore: a shelter saved during this night is kept, an old one is forgotten', () => {
+    const { loop } = nightLoop(fakeAgent());
+    const now = Date.now();
+    loop.restoreState({ version: 1, savedAt: now, clean: true, loop: { sheltered: { y: 60, at: now - 60_000 } } });
+    assert.equal(loop.sheltered?.y, 60);
+    loop.restoreState({ version: 1, savedAt: now, clean: true, loop: { sheltered: { y: 60, at: now - 3_600_000 } } });
+    assert.equal(loop.sheltered, null);
+    loop.restoreState({ version: 1, savedAt: now, clean: true, loop: { sheltered: true } });
+    assert.equal(loop.sheltered, null, 'the old boolean form is not trusted');
+});
+
+test('isNight: the boundaries', async () => {
+    const { isNight, NIGHT_START, NIGHT_END } = await import('../../src/decision/daylight.js');
+    assert.equal(isNight(NIGHT_START - 1), false);
+    assert.equal(isNight(NIGHT_START), true);
+    assert.equal(isNight(NIGHT_END - 1), true);
+    assert.equal(isNight(NIGHT_END), false);
 });

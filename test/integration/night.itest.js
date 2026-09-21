@@ -73,5 +73,5 @@ test('at night it digs in, survives zombies, and climbs out at dawn', { timeout:
         if (Date.now() > out) assert.fail('never left the shelter at dawn');
         await sleep(2_000);
     }
-    assert.equal(loadJSON(`./bots/${BOT}/decision_state.json`)?.loop?.sheltered, false);
+    assert.equal(loadJSON(`./bots/${BOT}/decision_state.json`)?.loop?.sheltered, null);
 });

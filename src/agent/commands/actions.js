@@ -482,7 +482,7 @@ export const actionsList = [
     },
     {
         name: '!shelter',
-        description: 'Dig in and wall up where you stand to be safe from mobs for the night.',
+        description: 'Dig three blocks down where you stand and wall and roof the hole with dirt or stone, to be safe from mobs for the night. Use !goToSurface in the morning to get out.',
         params: {},
         perform: runAsAction(async (agent) => {
             await skills.shelter(agent.bot);

@@ -1,3 +1,4 @@
+import { isEnclosedAt } from '../../decision/daylight.js';
 import pf from 'mineflayer-pathfinder';
 import * as mc from '../../utils/mcdata.js';
 
@@ -430,9 +431,8 @@ export function getBiomeName(bot) {
     return mc.getAllBiomes()[biomeId].name;
 }
 
-// mindcraft fork: the spaces around a standing bot that must be solid for it to be safe from mobs: the four sides
-// at feet and head height, and the block above the head.
-export const ENCLOSURE_OFFSETS = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1], [0, 2, 0]];
+// mindcraft fork: see src/decision/daylight.js
+export { ENCLOSURE_OFFSETS } from '../../decision/daylight.js';
 
 export function isEnclosed(bot) {
     /**
@@ -440,9 +440,5 @@ export function isEnclosed(bot) {
      * @param {MinecraftBot} bot
      * @returns {boolean}
      **/
-    const feet = bot.entity.position.floored();
-    return ENCLOSURE_OFFSETS.every(([dx, dy, dz]) => {
-        const block = bot.blockAt(feet.offset(dx, dy, dz));
-        return !!block && block.boundingBox === 'block';
-    });
+    return isEnclosedAt(pos => bot.blockAt(pos), bot.entity.position.floored());
 }

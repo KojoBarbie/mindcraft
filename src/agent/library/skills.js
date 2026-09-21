@@ -2092,10 +2092,11 @@ export async function useToolOn(bot, toolName, targetName) {
     return true;
  }
 
-// mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall, so they are not here.
-const SHELTER_FILLERS = ['dirt', 'coarse_dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'andesite', 'diorite',
-    'granite', 'tuff', 'stone', 'deepslate', 'sandstone', 'oak_planks', 'spruce_planks', 'birch_planks', 'acacia_planks',
-    'jungle_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks'];
+// mindcraft fork: blocks worth walling a shelter with, cheapest first. Sand and gravel fall (a roof of them lands
+// on the bot's head); planks are left alone because the first goals need them for tools.
+const SHELTER_FILLERS = ['dirt', 'coarse_dirt', 'rooted_dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'andesite',
+    'diorite', 'granite', 'tuff', 'stone', 'deepslate', 'sandstone', 'red_sandstone', 'mud', 'clay'];
+const countFillers = bot => bot.inventory.items().filter(item => SHELTER_FILLERS.includes(item.name)).reduce((sum, item) => sum + item.count, 0);
 
 export async function shelter(bot) {
     /**
@@ -2137,10 +2138,17 @@ export async function shelter(bot) {
         const below = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0));
         settled = bot.entity.onGround && below && below.boundingBox === 'block' ? settled + 1 : 0;
     }
-    await pickupNearbyItems(bot); // the dug blocks drop at the bot's feet; they are the walls
+    // The dug blocks drop into the hole and are picked up by standing on them; pickupNearbyItems would walk (or
+    // tower) out after anything further away.
+    await new Promise(resolve => setTimeout(resolve, 600));
 
     const feet = bot.entity.position.floored();
-    for (const [dx, dy, dz] of world.ENCLOSURE_OFFSETS) {
+    const open = world.ENCLOSURE_OFFSETS.filter(([dx, dy, dz]) => bot.blockAt(feet.offset(dx, dy, dz))?.boundingBox !== 'block');
+    if (open.length > countFillers(bot)) {
+        log(bot, `Need ${open.length} blocks (dirt, cobblestone, ...) to close the shelter but have ${countFillers(bot)}.`);
+        return false;
+    }
+    for (const [dx, dy, dz] of open) {
         if (bot.interrupt_code) return false;
         const spot = feet.offset(dx, dy, dz);
         const block = bot.blockAt(spot);

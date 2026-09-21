@@ -226,15 +226,23 @@ since the agent started.
 One run for scale (Jev, fresh world to a wooden pickaxe, 2.5 min): 53 calls of which 36 were the "stop now?"
 check while an action ran, p50 467 ms / p95 931 ms, $0.03/h.
 
-### Nights (`nightRoutine` in `tactical_loop.js`, `skills.shelter`)
+### Nights (`nightRoutine` in `tactical_loop.js`, `skills.shelter`, `daylight.js`)
 
 Nights are handled by rule, before any model is asked: an unarmoured bot on the surface at night died 20 times
-in one night of a soak test, losing its inventory each time. From dusk (time of day 12,500) the loop stops the
-command it fired, then sleeps if a bed is in sight (`!goToBed`) or digs in (`!shelter`: centre on the block, dig
-three down, wall and roof whatever is open with dirt or stone; three so the roof sits below ground where the
-hole's sides hold it). Once boxed in it waits, calling no provider at all, until dawn (23,300), then climbs out
-with `!goToSurface`. Reflexes (self-defence) are never cut short. `"tactical": {"nightShelter": false}` turns it
-off. `test/integration/night.itest.js` sets zombies on it through a night.
+in one night of a soak test, losing its inventory each time. From dusk (time of day 12,500, `daylight.js`) the
+loop stops the command it fired (never a reflex), then digs in with `!shelter`: centre on the block, dig three
+down, and wall and roof whatever is open with dirt or stone (three, so the roof sits below ground where the
+hole's sides hold it; planks are kept for tools; it checks it has enough blocks first). Once boxed in it waits,
+calling no provider at all, until dawn (23,300), then climbs out with `!goToSurface`, but only if it is still
+where it dug in.
+
+It steps aside and lets the day's decisions carry on when the bot is under cover already (rock overhead:
+mining, a cave), outside the overworld, after three failed shelters in one night (retries 15 s apart), or once
+the night has lasted longer than any real one (`tactical.nightMaxMs`, 12 min; with the daylight cycle off a night
+never ends). A shelter restored after a restart is used only if it was made in the last 15 minutes; a death
+forgets it. `"tactical": {"nightShelter": false}` turns the routine off. `test/integration/night.itest.js` sets
+zombies on it through a night. Beds are left to the model (`sleep` in the catalog): sleeping fails with monsters
+near or while other players are awake, and `!goToBed` then waits long enough to get the agent killed.
 
 A second server for experiments like that one, which change the time, without disturbing a run on the first:
 
