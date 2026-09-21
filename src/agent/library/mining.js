@@ -174,8 +174,9 @@ export async function descendTo(bot, targetY) {
         let blocked = null;
         // headroom over the step, the step itself, then its floor must hold
         for (const pos of [feet.offset(heading[0], 1, heading[1]), feet.offset(heading[0], 0, heading[1]), step]) {
+            const name = bot.blockAt(pos)?.name;
             const result = await clear(bot, pos);
-            if (result !== 'ok') { blocked = result; break; }
+            if (result !== 'ok') { blocked = `${result} (${name} at ${pos})`; break; }
         }
         const floor = bot.blockAt(step.offset(0, -1, 0));
         if (!blocked && !solid(floor)) {
@@ -184,6 +185,7 @@ export async function descendTo(bot, targetY) {
             else if (!await fillFloor(bot, step.offset(0, -1, 0)) && !safeDrop(bot, step)) blocked = 'drop';
         }
         if (blocked) {
+            log(bot, `Heading ${bot.mineHeading % 4} blocked: ${blocked}.`);
             if (++turns > 4) {
                 log(bot, `Cannot go further down from ${feet}: ${blocked} in every direction.`);
                 return false;

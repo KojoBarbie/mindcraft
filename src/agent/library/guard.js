@@ -56,6 +56,7 @@ function darkSpot(bot, center, radius) {
 export async function patrol(bot, center, radius = 24) {
     const s = stats(bot);
     const post = new Vec3(center.x, center.y, center.z);
+    try { bot.armorManager?.equipAll(); } catch { /* nothing to wear */ } // armour handed over is not always put on
 
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)

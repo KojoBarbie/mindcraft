@@ -60,6 +60,10 @@ export function createGuardRole(options = {}) {
                 const food = Object.entries(inv).reduce((sum, [name, n]) => sum + (good(name) ? n : 0), 0);
                 const short = [];
                 if (!Object.keys(inv).some(name => /(stone|iron|diamond|netherite)_sword$/.test(name))) short.push(() => ensureGoal(loop.goals, haveTool('stone', 'sword'), 1000));
+                // a guard in cloth dies over and over (ten times in one test night): iron before the next night
+                else if (!Object.keys(inv).some(name => /(iron|diamond|netherite)_sword$/.test(name))) short.push(() => ensureGoal(loop.goals, haveTool('iron', 'sword'), 980));
+                if (!(inv.iron_chestplate > 0) && !(inv.diamond_chestplate > 0)) short.push(() => ensureGoal(loop.goals, haveItem('iron_chestplate', 1), 975));
+                if (!(inv.shield > 0)) short.push(() => ensureGoal(loop.goals, haveItem('shield', 1), 970));
                 if ((inv.torch ?? 0) < 8) short.push(() => ensureGoal(loop.goals, haveItem('torch', 24), 990));
                 if (food < 4) short.push(() => ensureGoal(loop.goals, haveFood(8), 995));
                 if (short.length > 0) {
