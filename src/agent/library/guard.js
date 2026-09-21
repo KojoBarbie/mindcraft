@@ -9,6 +9,7 @@ import * as world from './world.js';
 import { attackEntity, consume, goToGoal, log, placeBlock } from './skills.js';
 
 const WAYPOINTS = 8;
+const NEUTRAL = ['enderman', 'zombified_piglin', 'piglin', 'spider_jockey_rider'];
 const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'bread', 'baked_potato', 'cooked_cod',
     'cooked_salmon', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'cooked_rabbit'];
 
@@ -60,7 +61,7 @@ export async function patrol(bot, center, radius = 24) {
 
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)
-    const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 10);
+    const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name), 10);
     if (!close && bot.inventory.items().some(item => item.name === 'torch')) {
         const spot = darkSpot(bot, post, radius);
         if (spot && await placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
@@ -70,8 +71,9 @@ export async function patrol(bot, center, radius = 24) {
     }
 
     // 1. a hostile inside the area: go and deal with it, unless hurt and outnumbered
-    const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && inArea(e.position, post, radius + 4), 32);
-    const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e)).length;
+    // endermen and the like only fight back when provoked: leave them be (both test deaths were endermen)
+    const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name) && inArea(e.position, post, radius + 4), 32);
+    const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e) && !NEUTRAL.includes(e.name)).length;
     const hurt = bot.health < 12;
     if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);

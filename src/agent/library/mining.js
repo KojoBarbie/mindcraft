@@ -20,10 +20,14 @@ function isLiquid(block) {
     return !!block && LIQUIDS.includes(block.name);
 }
 
-/** Would opening this block let lava or water in? Checks the block and its six neighbours. */
+/**
+ * Would opening this block let lava in, or is it liquid itself? Water next door is let be: an aquifer at y=56
+ * surrounded a miner on every side and stopped it for good, and water in a tunnel is only a nuisance (the bot
+ * swims). Lava next door is never opened.
+ */
 export function nearLiquid(bot, pos) {
     if (isLiquid(bot.blockAt(pos))) return true;
-    return SIDES.some(([dx, dy, dz]) => isLiquid(bot.blockAt(pos.offset(dx, dy, dz))));
+    return SIDES.some(([dx, dy, dz]) => bot.blockAt(pos.offset(dx, dy, dz))?.name === 'lava');
 }
 
 function solid(block) {
