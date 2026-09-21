@@ -41,6 +41,8 @@ const name = opt('name', 'demo_bot');
 // as soon as the inventory holds that many
 const role = opt('role', '');
 const [untilItem, untilCount] = opt('until', '').split(':');
+// --role-options '{"quota": 16, "chest": "start"}'; --chest puts a chest two blocks east of the bot at the start
+const roleOptions = JSON.parse(opt('role-options', '{}'));
 const port = Number(opt('port', '8120')); // the MindServer's; give each demo running at once its own
 const sleep = (/** @type {number} */ ms) => new Promise(resolve => setTimeout(resolve, ms));
 /** @param {string} path */
@@ -64,12 +66,17 @@ async function main() {
 
     const harness = await startHarness({
         name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000,
-        profile: { decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini', ...(role ? { role: { type: role } } : {}) },
+        profile: {
+            decision_model: 'jev', goals: [], strategy_model: 'gpt-5-mini',
+            ...(role ? { role: { type: role, ...roleOptions } } : {}),
+            tactical: { startDelayMs: 8000 }, // time to move it to the surface and set the scene first
+        },
     });
     await rcon(`clear ${name}`);
     // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
     // began inside the previous night's shelter).
     if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
+    if (args.includes('--chest')) await rcon(`execute at ${name} run setblock ~2 ~ ~ minecraft:chest`);
     // --give iron_pickaxe:1,torch:32 : a starting kit, to try one part of a role without waiting for the rest
     for (const entry of opt('give', '').split(',').filter(Boolean)) {
         const [item, count] = entry.split(':');

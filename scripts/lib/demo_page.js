@@ -46,7 +46,7 @@ export async function packSheets(framesDir, count, out) {
 const VERBS = /** @type {Record<string, string>} */ ({
     collectBlocks: '集める', craftRecipe: '作る', smeltItem: '精錬する', searchForBlock: '探しに行く',
     searchForEntity: '探しに行く', moveAway: '歩いて探索する', attack: '倒す', consume: '食べる', equip: '装備する',
-    explore: '歩いて探索する', descendTo: '階段を掘って降りる', branchMine: 'ブランチマイニング', shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
+    explore: '歩いて探索する', descendTo: '階段を掘って降りる', branchMine: 'ブランチマイニング', chopTree: '木を 1 本切り倒す', depositLogs: 'チェストに納品する', shelter: '穴を掘って籠もる', goToSurface: '地上へ出る', digDown: '掘り下げる', placeHere: '置く', stay: '待つ',
     goToBed: 'ベッドで寝る', takeFromChest: 'チェストから取る', putInChest: 'チェストにしまう', givePlayer: '渡す',
     goToPlayer: 'プレイヤーの所へ行く', followPlayer: 'ついて行く', clearFurnace: 'かまどから取り出す', discard: '捨てる',
 });
@@ -57,7 +57,7 @@ export function describeCommand(command) {
     if (!m) return command ?? '';
     const verb = VERBS[m[1]] ?? m[1];
     const parts = m[2].split(',').map(p => p.trim().replace(/^"|"$/g, '')).filter(Boolean);
-    if (['moveAway', 'stay', 'explore', 'branchMine'].includes(m[1])) return verb;
+    if (['moveAway', 'stay', 'explore', 'branchMine', 'chopTree', 'depositLogs'].includes(m[1])) return verb;
     if (m[1] === 'descendTo') return `y=${m[2]} まで${verb}`;
     const [what, n] = parts;
     return what ? `${what}${n ? ` ×${n}` : ''} を${verb}` : verb;

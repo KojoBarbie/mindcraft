@@ -1,5 +1,6 @@
 import * as skills from '../library/skills.js';
 import * as mining from '../library/mining.js';
+import * as forestry from '../library/forestry.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 
@@ -176,6 +177,30 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, x, z, radius) => {
             await mining.branchMine(agent.bot, { x, z }, radius);
+        })
+    },
+    {
+        name: '!chopTree',
+        description: 'Fell the nearest whole tree within the radius of the center, pick up what drops and replant a sapling.',
+        params: {
+            'center_x': { type: 'float', description: 'x of the center of the area.', domain: [-30000000, 30000000] },
+            'center_z': { type: 'float', description: 'z of the center of the area.', domain: [-30000000, 30000000] },
+            'radius': { type: 'int', description: 'How far from the center to look for trees.', domain: [4, 256] },
+        },
+        perform: runAsAction(async (agent, x, z, radius) => {
+            await forestry.chopTree(agent.bot, { x, z }, radius);
+        })
+    },
+    {
+        name: '!depositLogs',
+        description: 'Put all logs into the chest at the given position.',
+        params: {
+            'x': { type: 'int', description: 'x of the chest.', domain: [-30000000, 30000000] },
+            'y': { type: 'int', description: 'y of the chest.', domain: [-64, 320] },
+            'z': { type: 'int', description: 'z of the chest.', domain: [-30000000, 30000000] },
+        },
+        perform: runAsAction(async (agent, x, y, z) => {
+            await forestry.depositLogs(agent.bot, x, y, z);
         })
     },
     {

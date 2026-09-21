@@ -31,7 +31,7 @@ import { createStrategist, isAddressedTo } from './strategist.js';
 const SITUATIONAL = ['eat', 'flee', 'attack', 'take_from_furnace', 'go_to_surface', 'explore', 'wait'];
 
 /** Commands a role's routine issues: while one runs, the loop leaves it alone. */
-const ROLE_COMMANDS = ['!descendTo', '!branchMine'];
+const ROLE_COMMANDS = ['!descendTo', '!branchMine', '!chopTree', '!depositLogs'];
 
 /** Looking for the thing the plan needs beats wandering: !moveAway happily walks into a cave. */
 const SEARCH_FOR = { collect_blocks: 'search_for_block', attack: 'search_for_entity' };
@@ -77,6 +77,7 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {{name: string, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null}} [role]
  *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
  *   loop pursue its goals as usual
+ * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)
  * @property {number} [nightMaxMs] the longest the loop waits out one night, in real time; a night lasts about 7
  *   minutes, but with the daylight cycle off it never ends. Default 12 minutes.
  * @property {(record: Record<string, unknown>) => void} [telemetry] receives every provider call and the loop's
@@ -170,6 +171,8 @@ export class TacticalLoop {
         this.absentBlocks = new Map();
         this.nightShelter = options.nightShelter ?? true;
         this.role = options.role ?? null;
+        this.startDelayMs = options.startDelayMs ?? 0;
+        this.startedAt = 0;
         this.nightMaxMs = options.nightMaxMs ?? 12 * 60_000;
         /** @type {{y: number, at: number} | null} where and when it dug in: at dawn it climbs out from there */
         this.sheltered = null;
@@ -237,6 +240,7 @@ export class TacticalLoop {
     }
 
     start() {
+        this.startedAt = Date.now();
         if (this.running) return;
         this.running = true;
         this.bindEvents();
@@ -398,6 +402,7 @@ export class TacticalLoop {
 
     async decide() {
         if (this.dead) return;
+        if (Date.now() - this.startedAt < this.startDelayMs) return;
         const epoch = this.epoch;
         if (this.pauseWhenAlone && !this.anyPlayerOnline()) {
             this.onEvent({ type: 'idle', detail: 'nobody online' });
@@ -1022,6 +1027,9 @@ export async function attachTacticalLoop(agent) {
     if (profile.role?.type === 'miner') {
         const { createMinerRole } = await import('./roles/miner.js');
         role = createMinerRole({ center: profile.role.center, radius: profile.role.radius, mineY: profile.role.mineY, say: text => agent.bot.chat(text) });
+    } else if (profile.role?.type === 'lumberjack') {
+        const { createLumberjackRole } = await import('./roles/lumberjack.js');
+        role = createLumberjackRole({ center: profile.role.center, radius: profile.role.radius, quota: profile.role.quota, chest: profile.role.chest, say: text => agent.bot.chat(text) });
     }
     const loop = new TacticalLoop(agent, provider, goals, gameData, {
         ...profile.tactical,
