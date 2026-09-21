@@ -204,6 +204,22 @@ estimate (gpt-5-nano says ~0.65 about answers it gets right every time), not a c
 
 `node scripts/try_provider.js <spec> [runs]` asks a real provider a real question and prints latency and tokens.
 
+### Jev (`providers/jev.js`)
+
+TypeSafe's decision model, through the Vercel AI Gateway's `POST /v1/evaluate` (key: `VERCEL_API_KEY`, an AI
+Gateway key). It answers each question with a calibrated probability and writes no text:
+
+```json
+"decision_model": ["jev", "openai", "rules"],
+"guard": { "maxUsdPerDay": 2, "inputUsdPerMillion": 0.042 }
+```
+
+Measured from Japan (2026-09-21): ~410 ms p50 for a decision, with occasional 2-4 s spikes; the model itself
+takes ~130 ms and the rest is the gateway, which processes in the US. Each request carries ~300 input tokens of
+fixed overhead, and the tactical loop's action question runs to ~450-550 tokens (~$0.00002 per decision).
+Confidence is meaningful: when the bot kept failing to craft, Jev's confidence in repeating it fell from 1.0
+to 0.5. TypeSafe is in early access and sometimes answers `system_overloaded`; that is retried.
+
 ### Known problems underneath the decision layer (Mindcraft / mineflayer on 1.21.6)
 
 Found by running the bot for real; they affect any Mindcraft bot, not just this fork.

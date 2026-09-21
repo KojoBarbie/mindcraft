@@ -3,6 +3,7 @@ import { DecisionError } from './errors.js';
 import { createMockProvider } from './providers/mock.js';
 import { createRulesProvider } from './providers/rules.js';
 import { createOpenAIProvider } from './providers/openai.js';
+import { createJevProvider } from './providers/jev.js';
 import { resilient } from './resilient.js';
 
 /** @typedef {import('./types.js').DecisionProvider} DecisionProvider */
@@ -20,6 +21,7 @@ const factories = new Map([
     ['mock', /** @type {ProviderFactory} */ (options => createMockProvider(options))],
     ['rules', /** @type {ProviderFactory} */ (options => createRulesProvider(options))],
     ['openai', /** @type {ProviderFactory} */ (options => createOpenAIProvider(options))],
+    ['jev', /** @type {ProviderFactory} */ (options => createJevProvider(options))],
     // Ollama speaks the same API on localhost and needs no key. The default is a model that does not think
     // before answering: a thinking model (qwen3) cannot be told not to through this API and blows the timeout.
     ['ollama', /** @type {ProviderFactory} */ (options => createOpenAIProvider({
