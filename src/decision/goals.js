@@ -166,6 +166,16 @@ export class GoalQueue {
         return revived;
     }
 
+    /**
+     * Move a goal up or down the queue.
+     * @param {number} id
+     * @param {number} priority
+     */
+    setPriority(id, priority) {
+        const queued = this.goals.find(g => g.id === id);
+        if (queued && Number.isFinite(priority)) queued.priority = priority;
+    }
+
     /** Progress resets the failure count: three failures in a row give up, not three over a whole session. @param {number} id */
     reportProgress(id) {
         const queued = this.goals.find(g => g.id === id);

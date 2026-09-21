@@ -123,6 +123,11 @@ export class TacticalLoop {
         this.onLowConfidence = options.onLowConfidence;
         /** @type {ReturnType<typeof import('./strategist.js').createStrategist> | null} set by attachTacticalLoop */
         this.strategist = null;
+        /**
+         * Set by attachTacticalLoop when a strategist is on: takes a player's chat line, returns true if handled.
+         * @type {((username: string, message: string) => boolean) | null}
+         */
+        this.hearPlayer = null;
         const onEvent = options.onEvent ?? (() => {});
         const telemetry = options.telemetry;
         /** @type {{goal: string, command: string, confidence: number | null, latencyMs: number, provider?: string, at: number} | null} */
@@ -767,25 +772,38 @@ export async function attachTacticalLoop(agent) {
     });
     const strategyContext = () => ({ snapshot: loop.rawSnapshot(), goals: loop.goals, currentGoal: loop.currentGoal || null, recent: loop.recent });
     if (profile.strategy_model) {
-        // any chat model Mindcraft knows (src/models/), e.g. "gpt-5-mini" or {"api": "anthropic", "model": "..."}
-        const { createModel, selectAPI } = await import('../models/_model_map.js');
-        const spec = selectAPI(structuredClone(profile.strategy_model));
-        const model = createModel(spec);
-        const name = `${spec.api}:${spec.model ?? 'default'}`;
-        strategist = createStrategist({
-            name, data: gameData, guard: loop.guard, telemetry, onEvent: loop.onEvent,
-            price: priceOf(name) ?? undefined,
-            ...(profile.strategy ?? {}),
-            complete: async (system, user) => ({ text: String(await model.sendRequest([{ role: 'user', content: user }], system) ?? '') }),
-            say: text => agent.bot.chat(text),
-        });
-        agent.bot.on('chat', (/** @type {string} */ username, /** @type {string} */ message) => {
-            if (username === agent.name) return;
-            const others = Object.keys(agent.bot.players ?? {}).filter(p => p !== agent.name).length;
-            if (isAddressedTo(message, agent.name, others))
+        // A strategist that cannot be set up (a typo in the model name, no key) must not take the tactical loop
+        // down with it: the bot carries on without one.
+        try {
+            // any chat model Mindcraft knows (src/models/), e.g. "gpt-5-mini" or {"api": "anthropic", "model": "..."}
+            const { createModel, selectAPI } = await import('../models/_model_map.js');
+            const { default: convoManager } = await import('../agent/conversation.js');
+            const spec = selectAPI(structuredClone(profile.strategy_model));
+            const model = createModel(spec);
+            const name = `${spec.api}:${spec.model ?? 'default'}`;
+            const tuning = /** @type {Record<string, any>} */ (profile.strategy ?? {});
+            strategist = createStrategist({
+                maxPerHour: tuning.maxPerHour, chatPerHour: tuning.chatPerHour, cooldownMs: tuning.cooldownMs,
+                maxGoals: tuning.maxGoals, maxRequestGoals: tuning.maxRequestGoals, timeoutMs: tuning.timeoutMs, apology: tuning.apology,
+                name, data: gameData, guard: loop.guard, telemetry, onEvent: loop.onEvent,
+                price: priceOf(name) ?? undefined,
+                complete: async (system, user) => ({ text: String(await model.sendRequest([{ role: 'user', content: user }], system) ?? '') }),
+                say: text => agent.bot.chat(text),
+            });
+            loop.strategist = strategist;
+            // Mindcraft's respondFunc (agent.js) hands natural-language chat here instead of to its own chat
+            // model; it has already dropped the bot's own lines, other bots and anyone outside only_chat_with.
+            loop.hearPlayer = (username, message) => {
+                const humans = Object.keys(agent.bot.players ?? {})
+                    .filter(p => p !== agent.name && !convoManager.isOtherAgent(p)).length;
+                if (!isAddressedTo(message, agent.name, humans)) return false;
                 strategist?.consult({ kind: 'chat', from: username, message }, strategyContext());
-        });
-        loop.strategist = strategist;
+                return true;
+            };
+        } catch (error) {
+            console.warn(`[tactical:${agent.name}] no strategist: ${error instanceof Error ? error.message : error}`);
+            strategist = null;
+        }
     }
     // budgets and bans carry over even when the goals were rebuilt
     loop.restoreState(saved, { goalsRestored: Boolean(sameGoals) });
