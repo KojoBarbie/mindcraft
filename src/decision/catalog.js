@@ -71,7 +71,7 @@ export const ACTIONS = [
         id: 'craft',
         hint: 'craft an item from what is in the inventory',
         targets: ({ knowledge }) => knowledge.craftable(),
-        quantities: () => [1, 4],
+        quantities: () => [1, 4, 16], // times the recipe is used, not items made
         build: (target, n) => `!craftRecipe(${q(target)}, ${n})`,
     },
     {
@@ -250,6 +250,16 @@ export function listQuantities(ctx, id, target) {
 }
 
 /**
+ * The most that can be asked for in one command; 0 for actions that take no quantity.
+ * @param {CatalogContext} ctx
+ * @param {string} id
+ * @param {string | undefined} target
+ */
+export function maxQuantity(ctx, id, target) {
+    return Math.max(0, ...listQuantities(ctx, id, target));
+}
+
+/**
  * The actions that are possible right now. An action that takes a target is possible only if it has one.
  * @param {CatalogContext} ctx
  * @returns {{id: string, hint: string}[]} never more than the catalog holds (20)
@@ -275,7 +285,10 @@ export function buildCommand(ctx, selection) {
     if (!listActions(ctx).some(a => a.id === selection.id)) throw new Error(`Action "${selection.id}" is not possible right now.`);
     if (action.targets && !listTargets(ctx, selection.id).includes(selection.target ?? ''))
         throw new Error(`"${selection.target}" is not a valid target for "${selection.id}".`);
-    if (action.quantities && !listQuantities(ctx, selection.id, selection.target).includes(selection.quantity ?? NaN))
+    // Offered quantities are round steps for a model to pick from; a planner may ask for an exact amount in
+    // between (11 stone), which is fine as long as it stays within what was on offer.
+    const quantity = selection.quantity ?? NaN;
+    if (action.quantities && !(Number.isInteger(quantity) && quantity >= 1 && quantity <= maxQuantity(ctx, selection.id, selection.target)))
         throw new Error(`${selection.quantity} is not a valid quantity for "${selection.id}".`);
     return action.build(action.targets ? selection.target : undefined, action.quantities ? selection.quantity : undefined, ctx);
 }

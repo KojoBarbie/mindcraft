@@ -20,12 +20,12 @@
  * @property {(item: string) => boolean} isFood
  */
 
-const TIERS = ['wooden', 'stone', 'golden', 'iron', 'diamond', 'netherite'];
-/** @param {string} tool */
-const tierRank = tool => {
-    const rank = TIERS.indexOf(tool.split('_')[0]);
-    return rank === -1 ? TIERS.length : rank;
-};
+// What a tool can mine, not how fancy it is: gold mines like wood, so a golden pickaxe is no step up from stone.
+const TIER_POWER = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 };
+/** @param {string} tool e.g. "iron_pickaxe" @returns {number} -1 if the name has no known tier */
+const tierRank = tool => TIER_POWER[/** @type {keyof typeof TIER_POWER} */ (tool.split('_')[0])] ?? -1;
+/** Recipes that only reshuffle storage forms (9 nuggets -> ingot, block -> 9 ingots). */
+export const COMPRESSED = /_block$|_nugget$|^(bone_meal|dried_kelp_block|hay_block)$/;
 // Gold tools are weak and gold is rarer than iron: never plan to make one.
 /** @param {string} tool */
 const worthMaking = tool => !tool.startsWith('golden_') && !tool.startsWith('netherite_');
@@ -54,16 +54,27 @@ export function createGameData(registry) {
     /** @param {number | {id: number} | null} entry */
     const nameOf = entry => (entry == null ? null : registry.items[typeof entry === 'number' ? entry : entry.id]?.name ?? null);
 
+    /** @param {string} name @param {string[]} drops */
+    function craftedFromOtherThings(name, drops) {
+        const id = registry.itemsByName[name]?.id;
+        return (registry.recipes[id] ?? []).some((/** @type {any} */ raw) => {
+            const cells = (raw.inShape ? raw.inShape.flat() : raw.ingredients).map(nameOf).filter(Boolean);
+            return !cells.some((/** @type {string} */ c) => COMPRESSED.test(c)) && cells.some((/** @type {string} */ c) => !drops.includes(c));
+        });
+    }
+
     /** @type {Map<string, string[]>} item -> blocks dropping it */
     const droppedBy = new Map();
     for (const block of Object.values(registry.blocksByName)) {
         const b = /** @type {any} */ (block);
         if (!b.diggable) continue;
-        // Only blocks found in nature count as a source. A campfire "drops" charcoal and a bookshelf books, but
-        // somebody has to craft and place them first; anything with a crafting recipe is left out.
-        const asItem = registry.itemsByName[b.name];
-        if (asItem && (registry.recipes[asItem.id] ?? []).length > 0) continue;
+        /** @type {string[]} */
         const drops = DROP_OVERRIDES[/** @type {keyof typeof DROP_OVERRIDES} */ (b.name)] ?? (b.drops ?? []).map(nameOf).filter(Boolean);
+        // Only blocks found in nature count as a source. A campfire "drops" charcoal and a bookshelf books, but
+        // somebody has to craft and place them first. So: leave out a block that does not drop itself and can
+        // be crafted from things other than its own drops. That keeps clay (4 clay_ball), melon, snow, glowstone
+        // and crops (wheat's only recipe is unpacking a hay_block), and drops campfires and bookshelves.
+        if (!drops.includes(b.name) && craftedFromOtherThings(b.name, drops)) continue;
         for (const item of drops) droppedBy.set(item, [...(droppedBy.get(item) ?? []), b.name]);
     }
 
@@ -97,9 +108,9 @@ export function createGameData(registry) {
 
         harvestTools(block) {
             const tools = registry.blocksByName[block]?.harvestTools;
-            if (!tools) return null;
+            if (!tools || Object.keys(tools).length === 0) return null;
             return Object.keys(tools).map(id => nameOf(Number(id))).filter(name => name !== null)
-                .sort((a, b) => tierRank(a) - tierRank(b));
+                .sort((a, b) => tierRank(a) - tierRank(b) || Number(a.startsWith('golden_')) - Number(b.startsWith('golden_')));
         },
 
         smeltedFrom: item => SMELTED_FROM[/** @type {keyof typeof SMELTED_FROM} */ (item)] ?? null,

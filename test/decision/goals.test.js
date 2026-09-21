@@ -13,6 +13,9 @@ test('isDone for each goal type', () => {
     assert.equal(isDone(haveTool('stone', 'pickaxe'), snap({ wooden_pickaxe: 1 }), isFood), false);
     assert.equal(isDone(haveTool('stone', 'pickaxe'), snap({ iron_pickaxe: 1 }), isFood), true); // better counts
     assert.equal(isDone(haveTool('stone', 'pickaxe'), snap({ iron_axe: 1 }), isFood), false);
+    assert.equal(isDone(haveTool('stone', 'pickaxe'), snap({ golden_pickaxe: 1 }), isFood), false); // gold mines like wood
+    assert.equal(isDone(haveTool('wooden', 'pickaxe'), snap({ golden_pickaxe: 1 }), isFood), true);
+    assert.equal(isDone(haveTool('diamond', 'pickaxe'), snap({ netherite_pickaxe: 1 }), isFood), true);
     assert.equal(isDone(haveTool('stone', 'pickaxe'), snap({ stone_pickaxe: 0 }), isFood), false);
     assert.equal(isDone(haveFood(5), snap({ bread: 3, cooked_beef: 2, dirt: 64 }), isFood), true);
     assert.equal(isDone(haveFood(5), snap({ mystery_meat: 5 }, ['mystery_meat']), isFood), true); // registry list wins
@@ -69,4 +72,26 @@ test('the queue survives a round trip through JSON', () => {
     assert.deepEqual(restored.toJSON(), queue.toJSON());
     assert.equal(restored.add(haveItem('torch')), 3);
     assert.equal(restored.reportFailure(a), true);
+});
+
+test('a damaged save is repaired on load instead of hanging or colliding', () => {
+    const restored = GoalQueue.fromJSON({
+        maxFailures: 'many', nextId: 1,
+        goals: [
+            { id: 1, goal: haveItem('furnace'), priority: 1, parent: 2, status: 'pending', failures: 0 },
+            { id: 2, goal: haveItem('torch'), priority: 1, parent: 1, status: 'pending', failures: -4 }, // a cycle
+            { id: 2, goal: haveItem('duplicate'), priority: 1, parent: null, status: 'pending', failures: 0 },
+            { id: 7, goal: { type: 'build_castle' }, priority: 9, parent: 99, status: 'pending', failures: 0 },
+            { id: 'x', goal: haveItem('junk') }, null, 'nonsense',
+        ],
+    });
+    assert.equal(restored.maxFailures, 3);
+    assert.deepEqual(restored.goals.map(g => g.id), [1, 2, 7]);
+    assert.ok(restored.goals.filter(g => g.id !== 7).some(g => g.parent === null)); // the cycle is cut
+    assert.equal(restored.goals[2].status, 'failed'); // unknown goal type: kept for the record, never pursued
+    assert.equal(restored.goals[2].parent, null);
+    assert.equal(restored.goals[1].failures, 0);
+    assert.deepEqual(restored.current(snap({}), isFood)?.goal, haveItem('furnace')); // and it terminates
+    assert.equal(restored.add(haveItem('stick')), 8); // ids are never reused
+    assert.deepEqual(GoalQueue.fromJSON(null).goals, []);
 });

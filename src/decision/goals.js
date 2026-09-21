@@ -13,6 +13,20 @@ import { tierRank } from './gamedata.js';
  * @typedef {HaveItem | HaveTool | HaveFood} Goal
  */
 
+// Edible, but not something to count on (or to be fed): the same list Mindcraft's auto-eat refuses.
+const BAD_FOOD = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chicken']);
+
+/**
+ * The one definition of "food" for goals, shared by isDone() and the planner so they cannot disagree.
+ * @param {Snapshot} snapshot
+ * @param {(item: string) => boolean} isFood fallback when the snapshot does not list its food items
+ * @returns {(item: string) => boolean}
+ */
+export function goodFood(snapshot, isFood) {
+    const listed = snapshot.foodItems ? new Set(snapshot.foodItems) : null;
+    return item => !BAD_FOOD.has(item) && (listed ? listed.has(item) : isFood(item));
+}
+
 /** @param {string} item @param {number} [count] @returns {HaveItem} */
 export const haveItem = (item, count = 1) => ({ type: 'have_item', item, count });
 /** @param {HaveTool['tier']} tier @param {HaveTool['tool']} tool @returns {HaveTool} */
@@ -32,12 +46,13 @@ export function isDone(goal, snapshot, isFood) {
             return (inventory[goal.item] ?? 0) >= goal.count;
         case 'have_tool':
             return Object.keys(inventory).some(name =>
-                inventory[name] > 0 && name.endsWith(`_${goal.tool}`) && tierRank(name) >= tierRank(`${goal.tier}_${goal.tool}`) && tierRank(name) < 6);
+                inventory[name] > 0 && name.endsWith(`_${goal.tool}`) && tierRank(name) >= tierRank(`${goal.tier}_${goal.tool}`));
         case 'have_food': {
-            const foods = snapshot.foodItems ? new Set(snapshot.foodItems) : null;
-            const total = Object.entries(inventory).reduce((sum, [name, n]) => sum + ((foods ? foods.has(name) : isFood(name)) ? n : 0), 0);
-            return total >= goal.count;
+            const good = goodFood(snapshot, isFood);
+            return Object.entries(inventory).reduce((sum, [name, n]) => sum + (good(name) ? n : 0), 0) >= goal.count;
         }
+        default:
+            return false; // a goal type this version does not know (e.g. restored from a newer save)
     }
 }
 
@@ -85,8 +100,9 @@ export class GoalQueue {
     }
 
     /**
-     * The goal to pursue now: the highest-priority pending one, earliest first among equals. Goals the
-     * snapshot shows to be done are closed on the way, so progress made by any means counts.
+     * The goal to pursue now: the highest-priority pending one, earliest first among equals. Note that this
+     * also updates the queue: goals the snapshot shows to be done are closed on the way, so progress made by
+     * any means (a player handing over a pickaxe) counts.
      * @param {Snapshot} snapshot
      * @param {(item: string) => boolean} isFood
      * @returns {QueuedGoal | null}
@@ -122,7 +138,10 @@ export class GoalQueue {
 
     /** @param {QueuedGoal} queued */
     blockedByFailedParent(queued) {
+        const seen = new Set();
         for (let parent = queued.parent; parent !== null;) {
+            if (seen.has(parent)) return false; // a cycle; fromJSON() removes them, this is the backstop
+            seen.add(parent);
             const p = this.goals.find(g => g.id === parent);
             if (!p) return false;
             if (p.status === 'failed') return true;
@@ -135,11 +154,37 @@ export class GoalQueue {
         return { maxFailures: this.maxFailures, nextId: this.nextId, goals: this.goals };
     }
 
-    /** @param {ReturnType<GoalQueue['toJSON']>} data */
+    /**
+     * Restore a saved queue. The file may be old, hand-edited or half-written, so nothing in it is trusted:
+     * malformed entries are dropped, unknown goal types are kept but marked failed, parent links that point
+     * nowhere or in a circle are cut, and ids are never reused.
+     * @param {unknown} data
+     */
     static fromJSON(data) {
-        const queue = new GoalQueue({ maxFailures: data.maxFailures });
-        queue.nextId = data.nextId;
-        queue.goals = data.goals.map(g => ({ ...g }));
+        const raw = /** @type {{maxFailures?: unknown, nextId?: unknown, goals?: unknown}} */ (data ?? {});
+        const queue = new GoalQueue({ maxFailures: Number.isInteger(raw.maxFailures) && Number(raw.maxFailures) > 0 ? Number(raw.maxFailures) : undefined });
+        const known = ['have_item', 'have_tool', 'have_food'];
+        for (const entry of Array.isArray(raw.goals) ? raw.goals : []) {
+            const g = /** @type {Partial<QueuedGoal>} */ (entry ?? {});
+            if (!Number.isInteger(g.id) || !g.goal || typeof g.goal.type !== 'string' || queue.goals.some(q => q.id === g.id)) continue;
+            const status = !known.includes(g.goal.type) ? 'failed' : g.status === 'done' || g.status === 'failed' ? g.status : 'pending';
+            queue.goals.push({
+                id: /** @type {number} */ (g.id), goal: g.goal, status,
+                priority: Number.isFinite(g.priority) ? Number(g.priority) : 0,
+                parent: Number.isInteger(g.parent) ? /** @type {number} */ (g.parent) : null,
+                failures: Number.isInteger(g.failures) && Number(g.failures) >= 0 ? Number(g.failures) : 0,
+            });
+        }
+        for (const queued of queue.goals) {
+            const seen = new Set([queued.id]);
+            for (let parent = queued.parent; parent !== null;) {
+                const p = queue.goals.find(q => q.id === parent);
+                if (!p || seen.has(parent)) { queued.parent = null; break; }
+                seen.add(parent);
+                parent = p.parent;
+            }
+        }
+        queue.nextId = Math.max(Number.isInteger(raw.nextId) ? Number(raw.nextId) : 1, ...queue.goals.map(q => q.id + 1));
         return queue;
     }
 }
