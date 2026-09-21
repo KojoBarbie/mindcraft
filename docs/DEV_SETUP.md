@@ -206,8 +206,10 @@ estimate (gpt-5-nano says ~0.65 about answers it gets right every time), not a c
 
 ### Jev (`providers/jev.js`)
 
-TypeSafe's decision model, through the Vercel AI Gateway's `POST /v1/evaluate` (key: `VERCEL_API_KEY`, an AI
-Gateway key). It answers each question with a calibrated probability and writes no text:
+TypeSafe's decision model, through the Vercel AI Gateway's `POST /v1/evaluate` (key: `AI_GATEWAY_API_KEY`, or
+`VERCEL_API_KEY`; either must be an AI Gateway key, not a Vercel REST API token). It answers each question with a calibrated probability and writes no text:
+
+Option hints (`ChoiceQuestion.hints`) go into Jev's per-option criteria, where it reads what each option means.
 
 ```json
 "decision_model": ["jev", "openai", "rules"],
