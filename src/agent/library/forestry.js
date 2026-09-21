@@ -219,13 +219,25 @@ async function findOrPlaceChest(bot, target) {
  */
 export async function depositLogs(bot, x, y, z) {
     const target = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
-    if (!await goToPosition(bot, target.x, target.y, target.z, 2)) {
-        log(bot, `Could not get to the chest at ${target}.`);
+    // where the chest for this spot actually is: the spot given can be out of reach (a demo's "where it
+    // started" was a tree top 40 blocks over the ground, and every delivery trip ended there empty-handed)
+    bot.chestFor ??= {};
+    const known = bot.chestFor[target.toString()];
+    const dest = known ? new Vec3(known.x, known.y, known.z) : target;
+    await goToPosition(bot, dest.x, dest.y, dest.z, 2).catch(() => false);
+    let chestBlock = null;
+    if (bot.entity.position.distanceTo(dest.offset(0.5, 0, 0.5)) <= 4.5) {
+        chestBlock = await findOrPlaceChest(bot, dest);
+    } else if (known) {
+        log(bot, `Could not get to the chest at ${dest}.`);
         return 0;
+    } else {
+        log(bot, `Could not get to ${target}: delivering to a chest here instead, and from now on.`);
+        chestBlock = await findOrPlaceChest(bot, bot.entity.position.floored());
     }
-    const chestBlock = await findOrPlaceChest(bot, target);
     if (!chestBlock) return 0;
     const chestPos = chestBlock.position;
+    bot.chestFor[target.toString()] = { x: chestPos.x, y: chestPos.y, z: chestPos.z };
     const container = await bot.openContainer(chestBlock);
     let moved = 0;
     try {

@@ -54,6 +54,26 @@ async function clearCraftingGrid(bot) {
     }
 }
 
+const ARMOR_SLOT = { helmet: ['head', 5], chestplate: ['torso', 6], leggings: ['legs', 7], boots: ['feet', 8] };
+const TIERS = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
+
+/**
+ * Put on the armour and the shield it carries. mindcraft fork: mineflayer-armor-manager's equipAll() did nothing on 1.21:
+ * a guard carried an iron chestplate in its bag through a night of zombies and skeletons.
+ * @param {MinecraftBot} bot
+ */
+export async function wearGear(bot) {
+    for (const [piece, [dest, slot]] of Object.entries(ARMOR_SLOT)) {
+        const worn = bot.inventory.slots[slot];
+        const best = bot.inventory.items().filter(item => item.name.endsWith(`_${piece}`))
+            .sort((a, b) => TIERS.indexOf(b.name.split('_')[0]) - TIERS.indexOf(a.name.split('_')[0]))[0];
+        if (!best || (worn && TIERS.indexOf(worn.name.split('_')[0]) >= TIERS.indexOf(best.name.split('_')[0]))) continue;
+        await bot.equip(best, /** @type {any} */ (dest)).catch(() => {});
+    }
+    const shield = bot.inventory.items().find(item => item.name === 'shield');
+    if (shield && bot.inventory.slots[45]?.name !== 'shield') await bot.equip(shield, 'off-hand').catch(() => {});
+}
+
 export async function craftRecipe(bot, itemName, num=1) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
@@ -147,7 +167,7 @@ export async function craftRecipe(bot, itemName, num=1) {
 
     //Equip any armor the bot may have crafted.
     //There is probablly a more efficient method than checking the entire inventory but this is all mineflayer-armor-manager provides. :P
-    bot.armorManager.equipAll(); 
+    await wearGear(bot);
 
     return true;
 }

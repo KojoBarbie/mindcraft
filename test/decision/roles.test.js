@@ -32,6 +32,9 @@ test('guard: keeps watch at night only when fit to fight', () => {
     assert.equal(role.keepsWatchAtNight, false, 'a stone sword and no armour: dig in like anyone else');
     role.step(l, snap({ inventory: kit }), isFood);
     assert.equal(role.keepsWatchAtNight, true);
+    const handed = createGuardRole();
+    handed.observe(snap({ inventory: kit }));
+    assert.equal(handed.keepsWatchAtNight, true, 'judged before its first step: a kit handed over at dusk counts');
     const bare = createGuardRole();
     assert.equal(bare.step(loop(), snap({ inventory: { stone_sword: 1 }, timeOfDay: 18000 }), isFood), null, 'no round it cannot fight');
     const worn = createGuardRole();

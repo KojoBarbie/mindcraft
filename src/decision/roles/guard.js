@@ -48,6 +48,15 @@ export function createGuardRole(options = {}) {
          * armour or a shield. Unequipped it fought everything and died ten times in one night.
          */
         get keepsWatchAtNight() { return ready; },
+        /**
+         * Fit to fight: an iron sword or better, and armour or a shield.
+         * @param {import('../snapshot.js').Snapshot} snapshot
+         */
+        observe(snapshot) {
+            const gear = snapshot.inventory;
+            ready = Object.keys(gear).some(name => /(iron|diamond|netherite)_sword$/.test(name))
+                && (Object.keys(gear).some(name => /_chestplate$/.test(name)) || (gear.shield ?? 0) > 0 || (snapshot.armor ?? []).length > 0);
+        },
 
         /**
          * @param {{goals: import('../goals.js').GoalQueue, onEvent: (event: {type: string, detail?: unknown}) => void}} loop
@@ -62,10 +71,8 @@ export function createGuardRole(options = {}) {
                 leashed = true;
             }
             const night = snapshot.dimension === 'overworld' && isNight(snapshot.timeOfDay);
-            const gear = snapshot.inventory;
             const hadReady = ready;
-            ready = Object.keys(gear).some(name => /(iron|diamond|netherite)_sword$/.test(name))
-                && (Object.keys(gear).some(name => /_chestplate$/.test(name)) || (gear.shield ?? 0) > 0 || (snapshot.armor ?? []).length > 0);
+            this.observe(snapshot);
             if (!ready && !toldNotReady && snapshot.timeOfDay >= 11_000 && snapshot.timeOfDay < 12_000) {
                 toldNotReady = true;
                 options.say?.('装備が揃っていないので、今夜は持ち場の近くで籠もって待機します。');

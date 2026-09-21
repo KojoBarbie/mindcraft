@@ -6,7 +6,7 @@ import Vec3 from 'vec3';
 import pf from 'mineflayer-pathfinder';
 import * as mc from '../../utils/mcdata.js';
 import * as world from './world.js';
-import { attackEntity, consume, goToGoal, log, placeBlock } from './skills.js';
+import { attackEntity, consume, goToGoal, log, placeBlock, wearGear } from './skills.js';
 
 const WAYPOINTS = 8;
 const NEUTRAL = ['enderman', 'zombified_piglin', 'piglin', 'spider_jockey_rider'];
@@ -47,24 +47,26 @@ function darkSpot(bot, center, radius) {
     return best?.pos ?? null;
 }
 
-const ARMOR_SLOT = { helmet: ['head', 5], chestplate: ['torso', 6], leggings: ['legs', 7], boots: ['feet', 8] };
-const TIERS = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
-
 /**
- * Put on the armour and the shield it carries. mineflayer-armor-manager's equipAll() did nothing on 1.21: a
- * guard went on patrol with two iron chestplates in its bag and died to zombies.
- * @param {MinecraftBot} bot
+ * The height to stand at on the ground at x, z (the first solid block down from above, not a tree), or null when
+ * that column is not loaded. Waypoints given by x and z alone led the pathfinder into a cave under the post, where
+ * the guard lit tunnels at y=23 and walked into lava.
+ * @returns {number | null}
  */
-export async function wearGear(bot) {
-    for (const [piece, [dest, slot]] of Object.entries(ARMOR_SLOT)) {
-        const worn = bot.inventory.slots[slot];
-        const best = bot.inventory.items().filter(item => item.name.endsWith(`_${piece}`))
-            .sort((a, b) => TIERS.indexOf(b.name.split('_')[0]) - TIERS.indexOf(a.name.split('_')[0]))[0];
-        if (!best || (worn && TIERS.indexOf(worn.name.split('_')[0]) >= TIERS.indexOf(best.name.split('_')[0]))) continue;
-        await bot.equip(best, /** @type {any} */ (dest)).catch(() => {});
+function groundAt(bot, x, z, fromY) {
+    for (let y = Math.min(fromY + 24, 319); y > -60; y--) {
+        const block = bot.blockAt(new Vec3(x, y, z));
+        if (!block) return null;
+        if (block.boundingBox === 'block' && !block.name.includes('leaves') && !block.name.endsWith('_log')) return y + 1;
     }
-    const shield = bot.inventory.items().find(item => item.name === 'shield');
-    if (shield && bot.inventory.slots[45]?.name !== 'shield') await bot.equip(shield, 'off-hand').catch(() => {});
+    return null;
+}
+
+/** Go to (x, z) on the ground, within `range`. */
+async function walkTo(bot, x, z, range) {
+    const y = groundAt(bot, Math.floor(x), Math.floor(z), Math.floor(bot.entity.position.y));
+    const goal = y === null ? new pf.goals.GoalNearXZ(x, z, range) : new pf.goals.GoalNear(x, y, z, range);
+    await goToGoal(bot, goal).catch(() => {});
 }
 
 /**
@@ -79,6 +81,14 @@ export async function patrol(bot, center, radius = 24) {
     const post = new Vec3(center.x, center.y, center.z);
     await wearGear(bot);
 
+    // underground (a cave under the post): the area to guard is the ground above
+    const feet = bot.entity.position.floored();
+    const ground = groundAt(bot, feet.x, feet.z, feet.y + 40);
+    if (ground !== null && feet.y < ground - 4) {
+        await walkTo(bot, post.x, post.z, 3);
+        return 'back up to the ground';
+    }
+
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)
     const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name), 10);
@@ -92,7 +102,9 @@ export async function patrol(bot, center, radius = 24) {
 
     // 1. a hostile inside the area: go and deal with it, unless hurt and outnumbered
     // endermen and the like only fight back when provoked: leave them be (both test deaths were endermen)
-    const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name) && inArea(e.position, post, radius + 4), 32);
+    // on the ground with it: a mob in a cave under the area is no threat to it, and chasing one leads underground
+    const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name) && inArea(e.position, post, radius + 4)
+        && Math.abs(e.position.y - bot.entity.position.y) < 8, 32);
     const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e) && !NEUTRAL.includes(e.name)).length;
     const hurt = bot.health < 12;
     if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
@@ -123,7 +135,7 @@ export async function patrol(bot, center, radius = 24) {
 
     // 2. hurt: back to the post and eat
     if (bot.health < 12 || bot.food < 14) {
-        if (bot.entity.position.distanceTo(post) > 4) await goToGoal(bot, new pf.goals.GoalNearXZ(post.x, post.z, 2)).catch(() => {}); // the post's height is where the bot stood (a tree top at spawn)
+        if (Math.hypot(bot.entity.position.x - post.x, bot.entity.position.z - post.z) > 4) await walkTo(bot, post.x, post.z, 2); // the post's own height is where the bot stood (a tree top at spawn)
         const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
         if (food && bot.food < 20) {
             await consume(bot, food);
@@ -145,9 +157,7 @@ export async function patrol(bot, center, radius = 24) {
     const angle = (2 * Math.PI * (s.round++ % WAYPOINTS)) / WAYPOINTS;
     const x = Math.round(post.x + Math.cos(angle) * radius * 0.6);
     const z = Math.round(post.z + Math.sin(angle) * radius * 0.6);
-    try {
-        await goToGoal(bot, new pf.goals.GoalNearXZ(x, z, 2));
-    } catch { /* an unreachable waypoint: the next one next time */ }
+    await walkTo(bot, x, z, 2); // an unreachable waypoint: the next one next time
     return `patrolled to ${x}, ${z}`;
 }
 

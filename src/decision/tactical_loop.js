@@ -92,7 +92,7 @@ const BENIGN = /Path not found, but attempting to navigate anyway[^.]*\.?/gi;
  * @property {number} [retryFailedAfterMs] a goal given up is tried again after this long
  * @property {boolean} [nightShelter] at night, dig in and wait for morning instead of deciding; default true.
  *   Nights are when an unarmoured bot dies, and deciding nothing there also costs nothing.
- * @property {{name: string, readonly keepsWatchAtNight?: boolean, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null, state?: () => unknown, restore?: (saved: any) => void}} [role]
+ * @property {{name: string, readonly keepsWatchAtNight?: boolean, observe?: (snapshot: any) => void, step: (loop: any, snapshot: any, isFood: (item: string) => boolean) => string | null, state?: () => unknown, restore?: (saved: any) => void}} [role]
  *   a job the bot does by routine (roles/*.js): when it returns a command the loop runs it; null lets the
  *   loop pursue its goals as usual
  * @property {number} [startDelayMs] decide nothing for this long after start (a test harness moving the bot first)
@@ -442,7 +442,22 @@ export class TacticalLoop {
             return;
         }
 
-        // The night is handled by rule, before anything costs money: see nightRoutine().
+        // Armour in the bag with nothing worn in its place: put it on (a guard carried a chestplate through a
+        // night of skeletons). Loaded only when needed: skills.js pulls in native modules the tests do without.
+        if (!this.pendingCommand && this.agent.isIdle()) {
+            const raw = this.rawSnapshot();
+            const worn = new Set((raw.armor ?? []).map(name => name.split('_').pop()));
+            const unworn = Object.keys(raw.inventory).some(name => /_(helmet|chestplate|leggings|boots)$/.test(name) && !worn.has(name.split('_').pop()));
+            if (unworn && this.agent.bot) {
+                const { wearGear } = await import('../agent/library/skills.js');
+                await wearGear(this.agent.bot);
+            }
+        }
+
+        // The night is handled by rule, before anything costs money: see nightRoutine(). A role that keeps watch
+        // at night judges that from what the bot has now, not from its last step (a guard handed a full kit at
+        // dusk dug in, because its first step had not run yet).
+        if (this.role?.observe) this.role.observe(this.rawSnapshot());
         if (this.nightShelter && !this.role?.keepsWatchAtNight && this.nightRoutine(epoch)) return;
 
         // Budgets apply to every provider call, the cheap interrupt question included.
