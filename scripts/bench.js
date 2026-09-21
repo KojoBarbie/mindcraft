@@ -21,9 +21,12 @@ import { createGameData } from '../src/decision/gamedata.js';
 import { isDone } from '../src/decision/goals.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
+// The lab server's compose file and data may live in another checkout (a git worktree runs the same server).
+const LAB_ROOT = process.env.MC_LAB_ROOT ?? ROOT;
 const SERVICE = 'minecraft-lab';
-const DATA = join(ROOT, 'server_data_lab');
-const PRISTINE = join(ROOT, 'server_data_lab_pristine');
+const DATA = join(LAB_ROOT, 'server_data_lab');
+const PRISTINE = join(LAB_ROOT, 'server_data_lab_pristine');
+process.env.COMPOSE_PROJECT_NAME ??= 'mindcraft'; // one compose project whichever checkout this runs from
 const WORLDS = ['world', 'world_nether', 'world_the_end'];
 process.env.MC_DEV_SERVICE = SERVICE; // rcon() and the harness go to the lab server
 process.env.MC_PORT = '55917';
@@ -39,7 +42,8 @@ const data = createGameData(mcdata('1.21.6'));
 
 /** @param {string[]} extra */
 function compose(...extra) {
-    execFileSync('docker', ['compose', '-f', join(ROOT, 'docker-compose.dev.yml'), '--profile', 'lab', ...extra], { stdio: 'ignore' });
+    execFileSync('docker', ['compose', '-f', join(LAB_ROOT, 'docker-compose.dev.yml'), '--profile', 'lab', ...extra],
+        { stdio: 'ignore', env: { ...process.env, MC_EULA: 'true' } }); // the lab server was started with the EULA accepted
 }
 
 async function waitForServer() {
