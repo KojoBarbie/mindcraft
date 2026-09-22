@@ -453,6 +453,14 @@ export class TacticalLoop {
                 const { wearGear } = await import('../agent/library/skills.js');
                 await wearGear(this.agent.bot);
             }
+            // Items left in the 2x2 crafting grid by a failed craft are counted as held but cannot be crafted
+            // with: the catalog refused "craft iron_chestplate" 25 times with the eight ingots sitting there.
+            const slots = this.agent.bot?.inventory?.slots;
+            if (Array.isArray(slots) && slots.slice(0, 5).some(Boolean)) {
+                const { clearCraftingGrid } = await import('../agent/library/skills.js');
+                await clearCraftingGrid(this.agent.bot);
+                this.onEvent({ type: 'cleared crafting grid' });
+            }
         }
 
         // The night is handled by rule, before anything costs money: see nightRoutine(). A role that keeps watch
