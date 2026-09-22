@@ -15,6 +15,7 @@ import { startHarness } from './lib/harness.js';
 import { rcon } from './lib/rcon.js';
 import { createCameraRig } from './lib/camera_rig.js';
 import { buildTimeline, packSheets, renderPage } from './lib/demo_page.js';
+import { IRON_KIT, countInVillage, findVillage, removeGolems, startRaid } from './lib/village.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2);
@@ -67,10 +68,18 @@ async function main() {
         const { restoreLabWorld } = await import('./lib/lab_world.js');
         await restoreLabWorld();
     }
-    await rcon('difficulty easy');
+    await rcon(`difficulty ${opt('difficulty', 'easy')}`);
     await rcon('weather clear');
     await rcon(`time set ${opt('time', '1000')}`);
 
+    // --village: found before the bot starts, so a guard's post is the village and not wherever it first stood
+    // (locating can take longer than the bot's first decision on a fresh world)
+    const village = args.includes('--village') ? await findVillage() : null;
+    if (village) {
+        console.log(`[demo] village at ${village.x}, ${village.z}`);
+        if (role === 'guard' && !roleOptions.center) roleOptions.center = [village.x, village.z];
+        if (role === 'guard' && !roleOptions.radius) roleOptions.radius = 40; // a village is wider than the default round
+    }
     const harness = await startHarness({
         name, mindserverPort: port, verbose: args.includes('--verbose'), spawnTimeoutMs: 120_000,
         profile: {
@@ -85,10 +94,27 @@ async function main() {
     await rcon(`effect give ${name} minecraft:saturation 1 20`);
     // Start on the surface near the world spawn, not wherever this bot name was left last time (a food run
     // began inside the previous night's shelter).
-    if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
+    // --village: the nearest village instead, with its iron golems gone (they would do the guarding)
+    if (village) {
+        await rcon(`spreadplayers ${village.x} ${village.z} 0 4 false ${name}`);
+        await sleep(4000); // let the chunks load before counting anything there
+        // a guard that dies comes back to the village (its bed there), not to the world spawn 500 blocks off,
+        // where the village unloads and every count reads zero
+        await rcon(`execute at ${name} run spawnpoint ${name} ~ ~ ~`);
+        await removeGolems(name);
+    } else if (!args.includes('--keep-position')) await rcon(`spreadplayers 0 0 0 8 false ${name}`);
+    // the server keeps the score: deaths, and mobs the bot killed
+    await rcon('scoreboard objectives add demo_deaths deathCount');
+    await rcon('scoreboard objectives add demo_kills minecraft.custom:minecraft.mob_kills');
+    await rcon(`scoreboard players set ${name} demo_deaths 0`);
+    await rcon(`scoreboard players set ${name} demo_kills 0`);
+    /** @param {string} objective */
+    const score = async objective => Number((await rcon(`scoreboard players get ${name} ${objective}`)).match(/has (\d+)/)?.[1] ?? 0);
     if (args.includes('--chest')) await rcon(`execute at ${name} run setblock ~2 ~ ~ minecraft:chest`);
     // --give iron_pickaxe:1,torch:32 : a starting kit, to try one part of a role without waiting for the rest
-    for (const entry of opt('give', '').split(',').filter(Boolean)) {
+    // --kit iron: a full set of iron, a shield, torches and bread (scripts/lib/village.js)
+    const kit = opt('kit', '') === 'iron' ? IRON_KIT : [];
+    for (const entry of [...kit, ...opt('give', '').split(',').filter(Boolean)]) {
         const [item, count] = entry.split(':');
         await rcon(`give ${name} minecraft:${item} ${Number(count || 1)}`);
     }
@@ -106,9 +132,28 @@ async function main() {
     /** @type {number | null} */
     let doneAt = null;
     const deadline = startedAt + minutes * 60_000;
+    /** @type {{t: number, villagers: number, raiders: number, deaths: number, kills: number, timeOfDay: number | null}[]} */
+    const scene = [];
+    let raidStarted = false;
+    let lastSample = 0;
     try {
         while (Date.now() < deadline) {
             const tick = Date.now();
+            // --village: how the village is doing, every 30 s (golems that villagers summon are removed again)
+            if (village && tick - lastSample > 30_000) {
+                lastSample = tick;
+                await removeGolems(name).catch(() => {});
+                scene.push({
+                    t: tick, villagers: await countInVillage(village, 'minecraft:villager', 64), raiders: await countInVillage(village, '#minecraft:raiders', 96),
+                    deaths: await score('demo_deaths'), kills: await score('demo_kills'), timeOfDay: latest?.gameplay?.timeOfDay ?? null,
+                });
+                console.log(`[demo] scene ${JSON.stringify(scene.at(-1))}`);
+            }
+            // --raid: once the guard has had time to take its post
+            if (args.includes('--raid') && !raidStarted && tick - startedAt > 20_000) {
+                raidStarted = true;
+                console.log(`[demo] raid: ${await startRaid(name)}`);
+            }
             if (!requestedAt && tick - startedAt > 3_000) {
                 if (request !== '-') harness.post(request); // a player's request, as the strategist hears it
                 requestedAt = Date.now();
@@ -140,7 +185,12 @@ async function main() {
 
     const telemetry = readJsonl(join(botDir, 'decisions.jsonl'));
     const usage = readJsonl(join(botDir, 'llm_usage.jsonl'));
-    writeFileSync(join(out, 'records.json'), JSON.stringify({ request, startedAt, requestedAt, doneAt, frames, telemetry, usage }));
+    writeFileSync(join(out, 'records.json'), JSON.stringify({ request, startedAt, requestedAt, doneAt, frames, telemetry, usage, scene }));
+    if (scene.length > 0) {
+        const first = scene[0];
+        const last = scene.at(-1);
+        console.log(`[demo] village: villagers ${first.villagers} -> ${last?.villagers}, bot deaths ${last?.deaths}, mobs killed ${last?.kills}, raiders left ${last?.raiders}`);
+    }
     const sheets = await packSheets(framesDir, frames.length, out);
     const timeline = buildTimeline({ request, startedAt, requestedAt, telemetry });
     writeFileSync(join(out, 'index.html'), renderPage({

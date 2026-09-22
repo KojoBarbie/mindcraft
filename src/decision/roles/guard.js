@@ -7,7 +7,7 @@ import { isNight } from '../daylight.js';
 
 /**
  * @typedef {object} GuardOptions
- * @property {[number, number, number]} [center] the post; default: where the role starts
+ * @property {[number, number, number] | [number, number]} [center] the post (x, y, z, or x, z); default: where the role starts
  * @property {number} [radius] default 24
  * @property {(text: string) => void} [say]
  * @property {() => {kills: Record<string, number>, torches: number}} [report] the night's tally, reset on read
@@ -27,8 +27,10 @@ function ensureGoal(queue, goal, priority) {
 /** @param {GuardOptions} [options] */
 export function createGuardRole(options = {}) {
     const radius = options.radius ?? 24;
+    // [x, y, z], or [x, z] for a post whose height is taken from where the bot first stands there
+    const given = options.center ?? null;
     /** @type {{x: number, y: number, z: number} | null} */
-    let post = options.center ? { x: options.center[0], y: options.center[1], z: options.center[2] } : null;
+    let post = given?.length === 3 ? { x: given[0], y: given[1], z: given[2] } : null;
     let wasNight = false;
     let ready = false;
     let toldNotReady = false;
@@ -65,7 +67,9 @@ export function createGuardRole(options = {}) {
          * @returns {string | null}
          */
         step(loop, snapshot, isFood) {
-            post ??= { x: Math.floor(snapshot.pos.x), y: Math.floor(snapshot.pos.y), z: Math.floor(snapshot.pos.z) };
+            post ??= given?.length === 2
+                ? { x: given[0], y: Math.floor(snapshot.pos.y), z: given[1] }
+                : { x: Math.floor(snapshot.pos.x), y: Math.floor(snapshot.pos.y), z: Math.floor(snapshot.pos.z) };
             if (!leashed) {
                 options.onPost?.(post);
                 leashed = true;
@@ -96,8 +100,11 @@ export function createGuardRole(options = {}) {
                 return `!goToward(${post.x}, ${post.z})`;
             }
 
+            // a fight on hand comes before any errand: a raid comes by day, and a guard sent for torches left six
+            // raiders in the village for ten minutes
+            const underAttack = (snapshot.entities ?? []).some(e => e.kind === 'hostile' && e.dist < radius + 56);
             // by day, get what the night needs; by night, make do with what there is
-            if (!night) {
+            if (!night && !(ready && underAttack)) {
                 const inv = snapshot.inventory;
                 const good = goodFood(snapshot, isFood);
                 const food = Object.entries(inv).reduce((sum, [name, n]) => sum + (good(name) ? n : 0), 0);
