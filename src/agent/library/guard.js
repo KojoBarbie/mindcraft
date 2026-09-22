@@ -10,6 +10,7 @@ import { attackEntity, consume, goToGoal, log, placeBlock, wearGear } from './sk
 
 const WAYPOINTS = 8;
 const NEUTRAL = ['enderman', 'zombified_piglin', 'piglin', 'spider_jockey_rider'];
+const RAIDERS = ['pillager', 'vindicator', 'evoker', 'ravager', 'illusioner', 'vex', 'witch'];
 const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'bread', 'baked_potato', 'cooked_cod',
     'cooked_salmon', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'cooked_rabbit'];
 
@@ -62,11 +63,25 @@ function groundAt(bot, x, z, fromY) {
     return null;
 }
 
-/** Go to (x, z) on the ground, within `range`. */
+/** Something to fight close by: a raider within 32 blocks, any other hostile within 12. */
+function threatNear(bot) {
+    return world.getNearestEntityWhere(bot, e => (RAIDERS.includes(e.name) && e.position.distanceTo(bot.entity.position) < 32)
+        || (mc.isHostile(e) && !NEUTRAL.includes(e.name) && e.position.distanceTo(bot.entity.position) < 12), 32);
+}
+
+/**
+ * Go to (x, z) on the ground, within `range`, giving up the walk as soon as something turns up to fight. A walk
+ * across the round took long enough for a pillager to shoot the guard dead without it once turning round.
+ */
 async function walkTo(bot, x, z, range) {
     const y = groundAt(bot, Math.floor(x), Math.floor(z), Math.floor(bot.entity.position.y));
     const goal = y === null ? new pf.goals.GoalNearXZ(x, z, range) : new pf.goals.GoalNear(x, y, z, range);
-    await goToGoal(bot, goal).catch(() => {});
+    const watch = setInterval(() => { if (threatNear(bot)) bot.pathfinder.stop(); }, 400);
+    try {
+        await goToGoal(bot, goal).catch(() => {});
+    } finally {
+        clearInterval(watch);
+    }
 }
 
 /**
@@ -89,10 +104,15 @@ export async function patrol(bot, center, radius = 24) {
         return 'back up to the ground';
     }
 
+    // a raid gathers at the edge of the village, 85-95 blocks from where /locate puts it, and comes for the
+    // villagers: raiders are met out there and first (a guard lit torches through a raid while they gathered)
+    const raider = world.getNearestEntityWhere(bot, e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + 56)
+        && Math.abs(e.position.y - bot.entity.position.y) < 16, 100);
+
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)
     const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name), 10);
-    if (!close && bot.inventory.items().some(item => item.name === 'torch')) {
+    if (!close && !raider && bot.inventory.items().some(item => item.name === 'torch')) {
         const spot = darkSpot(bot, post, radius);
         if (spot && await placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
             s.torches++;
@@ -103,7 +123,7 @@ export async function patrol(bot, center, radius = 24) {
     // 1. a hostile inside the area: go and deal with it, unless hurt and outnumbered
     // endermen and the like only fight back when provoked: leave them be (both test deaths were endermen)
     // on the ground with it: a mob in a cave under the area is no threat to it, and chasing one leads underground
-    const enemy = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name) && inArea(e.position, post, radius + 4)
+    const enemy = raider ?? world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name) && inArea(e.position, post, radius + 4)
         && Math.abs(e.position.y - bot.entity.position.y) < 8, 32);
     const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e) && !NEUTRAL.includes(e.name)).length;
     const hurt = bot.health < 12;

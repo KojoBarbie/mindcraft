@@ -86,3 +86,17 @@ test('lumberjack: chops until a batch, delivers, counts what went in, and stops 
     assert.equal(role.step(l, snap({ inventory: { wooden_axe: 1, oak_log: 0 } })), null, 'quota met after the delivery');
     assert.equal(role.delivered, 9);
 });
+
+test('guard: a post given as x, z takes its height from where the bot first stands', () => {
+    const role = createGuardRole({ center: [-496, 192] });
+    role.step(loop(), snap({ pos: { x: -494, y: 68, z: 190 }, inventory: {} }), isFood);
+    assert.deepEqual(/** @type {any} */ (role.state()).post, { x: -496, y: 68, z: 192 });
+});
+
+test('guard: by day, a fight on hand comes before fetching torches', () => {
+    const role = createGuardRole();
+    const inventory = { iron_sword: 1, iron_chestplate: 1, shield: 1, bread: 8, torch: 2 };
+    const raid = [{ name: 'pillager', kind: 'hostile', dist: 30 }];
+    assert.match(String(role.step(loop(), snap({ inventory, entities: raid }), isFood)), /^!patrol/);
+    assert.equal(role.step(loop(), snap({ inventory, entities: [] }), isFood), null, 'quiet: off for torches');
+});
