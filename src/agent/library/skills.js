@@ -44,7 +44,7 @@ async function equipHighestAttack(bot) {
  * back; shift-clicking is the fallback.
  * @param {MinecraftBot} bot
  */
-async function clearCraftingGrid(bot) {
+export async function clearCraftingGrid(bot) {
     const stuck = () => [0, 1, 2, 3, 4].filter(slot => bot.inventory.slots[slot]);
     if (stuck().length === 0) return;
     try { bot.closeWindow(bot.inventory); } catch { /* not open */ }
