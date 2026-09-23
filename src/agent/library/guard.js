@@ -11,6 +11,7 @@ import { attackEntity, consume, goToGoal, log, placeBlock, wearGear } from './sk
 const WAYPOINTS = 8;
 const NEUTRAL = ['enderman', 'zombified_piglin', 'piglin', 'spider_jockey_rider'];
 const RAIDERS = ['pillager', 'vindicator', 'evoker', 'ravager', 'illusioner', 'vex', 'witch'];
+const RANGED = ['pillager', 'skeleton', 'stray', 'bogged', 'witch', 'illusioner', 'drowned'];
 const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'bread', 'baked_potato', 'cooked_cod',
     'cooked_salmon', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'cooked_rabbit'];
 
@@ -58,6 +59,8 @@ function groundAt(bot, x, z, fromY) {
     for (let y = Math.min(fromY + 24, 319); y > -60; y--) {
         const block = bot.blockAt(new Vec3(x, y, z));
         if (!block) return null;
+        // standing in water drowns a guard that stops to fight there: that column is not ground to walk to
+        if (block.name === 'water' || block.name === 'lava' || block.name === 'kelp' || block.name === 'seagrass') return null;
         if (block.boundingBox === 'block' && !block.name.includes('leaves') && !block.name.endsWith('_log')) return y + 1;
     }
     return null;
@@ -75,7 +78,8 @@ function threatNear(bot) {
  */
 async function walkTo(bot, x, z, range) {
     const y = groundAt(bot, Math.floor(x), Math.floor(z), Math.floor(bot.entity.position.y));
-    const goal = y === null ? new pf.goals.GoalNearXZ(x, z, range) : new pf.goals.GoalNear(x, y, z, range);
+    if (y === null) return; // water, lava, or a column not loaded: not a place to stand. The next point will do
+    const goal = new pf.goals.GoalNear(x, y, z, range);
     const watch = setInterval(() => { if (threatNear(bot)) bot.pathfinder.stop(); }, 400);
     try {
         await goToGoal(bot, goal).catch(() => {});
@@ -106,8 +110,26 @@ export async function patrol(bot, center, radius = 24) {
 
     // a raid gathers at the edge of the village, 85-95 blocks from where /locate puts it, and comes for the
     // villagers: raiders are met out there and first (a guard lit torches through a raid while they gathered)
-    const raider = world.getNearestEntityWhere(bot, e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + 56)
-        && Math.abs(e.position.y - bot.entity.position.y) < 16, 100);
+    const raiders = Object.values(bot.entities).filter(e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + 56)
+        && Math.abs(e.position.y - bot.entity.position.y) < 16 && e.position.distanceTo(bot.entity.position) < 100);
+    // the one nearest a villager first: the raid is only dangerous where the villagers are, and a guard that
+    // took them in the order it met them lost four of five while it worked through the ones by the wall
+    const villagers = Object.values(bot.entities).filter(e => e.name === 'villager');
+    const toVillager = (/** @type {any} */ e) => Math.min(Infinity, ...villagers.map(v => v.position.distanceTo(e.position)));
+    const raider = raiders.sort((a, b) => (toVillager(a) - toVillager(b)) || (a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)))[0] ?? null;
+
+    // 0. badly hurt: out of the fight, back to the post and eat. Health below eight is two hits from a
+    // vindicator, and the guard died in the next exchange every time it pressed on
+    if (bot.health < 8) {
+        const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
+        if (bot.entity.position.distanceTo(post) > 6) await walkTo(bot, post.x, post.z, 3);
+        if (food && bot.food < 20) {
+            await consume(bot, food);
+            return `hurt: ate ${food}`;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return 'hurt: holding back';
+    }
 
     // 0. nothing close: light the area first, or it fills with mobs faster than they can be fought (131 in a
     // night with no torch placed, because there was always some mob in the area to go after)
@@ -131,7 +153,14 @@ export async function patrol(bot, center, radius = 24) {
         // attackEntity counts a mob out of 24 blocks as killed: a creeper across the area was "killed" 83 times
         // while the guard stood still and zombies took it apart. Close in first.
         if (enemy.position.distanceTo(bot.entity.position) > 16) {
-            await goToGoal(bot, new pf.goals.GoalNear(enemy.position.x, enemy.position.y, enemy.position.z, 4)).catch(() => {});
+            // shield up while closing on something that shoots: pillagers and skeletons did most of the killing
+            const shielded = RANGED.includes(enemy.name) && bot.inventory.slots[45]?.name === 'shield';
+            if (shielded) { bot.lookAt(enemy.position.offset(0, 1.4, 0), true).catch(() => {}); bot.activateItem(true); }
+            try {
+                await goToGoal(bot, new pf.goals.GoalNear(enemy.position.x, enemy.position.y, enemy.position.z, 4)).catch(() => {});
+            } finally {
+                if (shielded) bot.deactivateItem();
+            }
             return `closed in on ${enemy.name}`;
         }
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);

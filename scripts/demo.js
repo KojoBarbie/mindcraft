@@ -114,10 +114,13 @@ async function main() {
     // --give iron_pickaxe:1,torch:32 : a starting kit, to try one part of a role without waiting for the rest
     // --kit iron: a full set of iron, a shield, torches and bread (scripts/lib/village.js)
     const kit = opt('kit', '') === 'iron' ? IRON_KIT : [];
-    for (const entry of [...kit, ...opt('give', '').split(',').filter(Boolean)]) {
-        const [item, count] = entry.split(':');
-        await rcon(`give ${name} minecraft:${item} ${Number(count || 1)}`);
-    }
+    const handOut = async (/** @type {string[]} */ entries) => {
+        for (const entry of entries) {
+            const [item, count] = entry.split(':');
+            await rcon(`give ${name} minecraft:${item} ${Number(count || 1)}`);
+        }
+    };
+    await handOut([...kit, ...opt('give', '').split(',').filter(Boolean)]);
     /** @type {any} */
     let latest = null;
     const feed = io(`http://localhost:${port}`);
@@ -143,9 +146,16 @@ async function main() {
             if (village && tick - lastSample > 30_000) {
                 lastSample = tick;
                 await removeGolems(name).catch(() => {});
+                const deaths = await score('demo_deaths');
+                // a guard that died lost the kit: hand it out again, or the scenario measures kit loss and not
+                // how well the village is held (it respawned into the raid unarmoured and died eight times)
+                if (kit.length > 0 && deaths > (scene.at(-1)?.deaths ?? 0)) {
+                    await handOut(kit);
+                    await rcon(`effect give ${name} minecraft:instant_health 1 10`);
+                }
                 scene.push({
                     t: tick, villagers: await countInVillage(village, 'minecraft:villager', 64), raiders: await countInVillage(village, '#minecraft:raiders', 96),
-                    deaths: await score('demo_deaths'), kills: await score('demo_kills'), timeOfDay: latest?.gameplay?.timeOfDay ?? null,
+                    deaths, kills: await score('demo_kills'), timeOfDay: latest?.gameplay?.timeOfDay ?? null,
                 });
                 console.log(`[demo] scene ${JSON.stringify(scene.at(-1))}`);
             }
