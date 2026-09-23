@@ -91,6 +91,13 @@ export function createGuardRole(options = {}) {
             }
             wasNight = night;
 
+            // no gear and raiders about: away from them. Respawning into a raid without armour killed a guard
+            // eight times in one afternoon
+            if (!ready && (snapshot.entities ?? []).some(e => e.kind === 'hostile' && e.dist < 24)) {
+                const away = Math.hypot(snapshot.pos.x - post.x, snapshot.pos.z - post.z);
+                if (away < radius) return `!goToward(${post.x + radius * 2}, ${post.z})`;
+            }
+
             // evening or night and away from the post (gear-gathering took it far): go back first
             const away = Math.hypot(snapshot.pos.x - post.x, snapshot.pos.z - post.z);
             if (away > radius * 2 && (night || snapshot.timeOfDay >= 11_000)) {
