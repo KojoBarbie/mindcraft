@@ -205,7 +205,9 @@ export async function patrol(bot, center, radius = 24) {
         }
     }
 
-    // 4. villagers to guard: stand with them rather than walk the round. What a raid costs is villagers, and
+    // 4. villagers to guard: stand with them rather than walk the round, and never leave them while a raid is
+    // on. Going out to finish off the last raiders once things went quiet was tried and lost all five villagers
+    // while the guard was away (it killed nine and came back to an empty village). What a raid costs is villagers, and
     // three tactics measured over one raid each say so plainly: meeting the raiders out at the edge left one
     // villager of five (19 kills), meeting them at the edge of the round left one of five (7 kills), standing
     // with them left all five alive with the guard unhurt (10 kills).
