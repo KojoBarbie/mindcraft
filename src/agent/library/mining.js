@@ -30,6 +30,12 @@ export function nearLiquid(bot, pos) {
     return SIDES.some(([dx, dy, dz]) => bot.blockAt(pos.offset(dx, dy, dz))?.name === 'lava');
 }
 
+/** Any liquid touching this block: digging here lets an aquifer into the shaft (a miner drowned in one). */
+function wetAround(bot, pos) {
+    if (isLiquid(bot.blockAt(pos))) return true;
+    return SIDES.some(([dx, dy, dz]) => isLiquid(bot.blockAt(pos.offset(dx, dy, dz))));
+}
+
 function solid(block) {
     return !!block && block.boundingBox === 'block';
 }
@@ -172,6 +178,14 @@ export async function descendTo(bot, targetY) {
     let turns = 0;
     while (bot.entity.position.y > targetY + 0.5) {
         if (bot.interrupt_code) return false;
+        // in the water after all (a shaft that broke into an aquifer): up and out before the air runs out
+        if (bot.entity.isInWater) {
+            log(bot, 'Water in the shaft: swimming up.');
+            bot.setControlState('jump', true);
+            for (let i = 0; i < 40 && bot.entity.isInWater; i++) await new Promise(resolve => setTimeout(resolve, 100));
+            bot.setControlState('jump', false);
+            return false;
+        }
         const heading = HEADINGS[bot.mineHeading % 4];
         const feet = bot.entity.position.floored();
         const step = feet.offset(heading[0], -1, heading[1]);
@@ -179,6 +193,8 @@ export async function descendTo(bot, targetY) {
         // headroom over the step, the step itself, then its floor must hold
         for (const pos of [feet.offset(heading[0], 1, heading[1]), feet.offset(heading[0], 0, heading[1]), step]) {
             const name = bot.blockAt(pos)?.name;
+            // water behind the next block floods the stair the moment it is dug: go around it
+            if (wetAround(bot, pos)) { blocked = `water beside ${name} at ${pos}`; break; }
             const result = await clear(bot, pos);
             if (result !== 'ok') { blocked = `${result} (${name} at ${pos})`; break; }
         }
@@ -225,6 +241,22 @@ function summarise(found) {
  * @returns {Promise<boolean>} true if anything was dug
  */
 export async function branchMine(bot, center = null, radius = 48, branchLength = 12) {
+    // Keep at it for a while per call. One junction's worth of tunnel is about 27 blocks, some twenty seconds of
+    // digging, and between calls the loop spends as long again on its decision and on walking back: half an hour
+    // underground came to four hundred blocks, where a diamond takes a thousand or two. Interrupts are checked
+    // every block (tunnel), so an action that is asked to stop still stops at once.
+    const until = Date.now() + 45_000;
+    let total = 0;
+    for (;;) {
+        const more = await branchMineOnce(bot, center, radius, branchLength);
+        total += more;
+        if (more === 0 || bot.interrupt_code || Date.now() > until) break;
+    }
+    return total > 0;
+}
+
+/** @returns {Promise<number>} blocks dug */
+async function branchMineOnce(bot, center = null, radius = 48, branchLength = 12) {
     bot.mineHeading ??= Math.floor(Math.random() * 4);
     const origin = center ?? bot.entity.position;
     const dist = pos => Math.hypot(pos.x - origin.x, pos.z - origin.z);
@@ -248,7 +280,7 @@ export async function branchMine(bot, center = null, radius = 48, branchLength =
         result = await tunnel(bot, main, 3, found, within);
         dug += result.dug;
     }
-    if (result.stopped === 'interrupted') return dug > 0;
+    if (result.stopped === 'interrupted') return dug;
     const junction = bot.entity.position.floored();
     for (const side of [1, 3]) {
         const heading = HEADINGS[(bot.mineHeading + side) % 4];
@@ -260,5 +292,5 @@ export async function branchMine(bot, center = null, radius = 48, branchLength =
     }
     const diamonds = bot.inventory.items().filter(item => item.name === 'diamond').reduce((n, item) => n + item.count, 0);
     log(bot, `Branch mined ${dug} blocks around ${junction}.${summarise(found)} Holding ${diamonds} diamond.`);
-    return dug > 0;
+    return dug;
 }
