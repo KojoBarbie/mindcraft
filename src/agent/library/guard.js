@@ -20,7 +20,9 @@ const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken
 
 function stats(bot) {
     if (!bot.guardStats) {
-        bot.guardStats = { kills: {}, torches: 0, round: 0 };
+        bot.guardStats = { kills: {}, torches: 0, round: 0, regroupUntil: 0 };
+        // straight back into the fight it just lost is another death: a raid cost eighteen that way. Regroup.
+        bot.on('death', () => { bot.guardStats.regroupUntil = Date.now() + 20_000; });
         // Every hostile that dies beside the guard counts for the night's tally, whoever struck the blow: most
         // of the fighting is done by the self-defence reflex, and a night of seventeen kills was reported as none.
         bot.on('entityDead', entity => {
@@ -188,11 +190,34 @@ async function patrolStep(bot, center, radius) {
     const toVillager = (/** @type {any} */ e) => Math.min(Infinity, ...villagers.map(v => v.position.distanceTo(e.position)));
     const raider = raiders.sort((a, b) => (toVillager(a) - toVillager(b)) || (a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)))[0] ?? null;
 
-    // 0. badly hurt: out of the fight, back to the post and eat. Health below eight is two hits from a
-    // vindicator, and the guard died in the next exchange every time it pressed on
-    if (bot.health < 8) {
+    // 0. just killed: stay at the post, eat, and let the mobs come to it rather than running back into them
+    if (Date.now() < (s.regroupUntil ?? 0)) {
+        if (bot.entity.position.distanceTo(post) > 8) await walkTo(bot, post.x, post.z, 3);
+        const meal = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
+        if (meal && bot.food < 20) await withTimeout(bot, consume(bot, meal), 6000);
+        else await new Promise(resolve => setTimeout(resolve, 500));
+        return 'regrouping';
+    }
+
+    // 1. a ravager in the area: keep away from it. It cannot be fought with an iron sword (a hundred health,
+    // and it charges), and standing near one killed this guard forty-two times in a single raid.
+    const ravager = world.getNearestEntityWhere(bot, e => e.name === 'ravager', 12);
+    if (ravager) {
+        const away = bot.entity.position.minus(ravager.position).normalize().scaled(16);
+        await walkTo(bot, bot.entity.position.x + away.x, bot.entity.position.z + away.z, 2);
+        return 'keeping clear of the ravager';
+    }
+
+    // 2. hurt: out of the fight, away from whatever is hitting it, and eat. Twelve is three hits from a
+    // vindicator; holding on to eight cost the guard seven deaths in one raid.
+    if (bot.health < 12) {
         const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
-        if (bot.entity.position.distanceTo(post) > 6) await walkTo(bot, post.x, post.z, 3);
+        const near = threatNear(bot);
+        if (near && near.position.distanceTo(bot.entity.position) < 8) {
+            // put ground between them first: eating in reach of a vindicator just feeds it the kill
+            const away = bot.entity.position.minus(near.position).normalize().scaled(12);
+            await walkTo(bot, bot.entity.position.x + away.x, bot.entity.position.z + away.z, 2);
+        } else if (bot.entity.position.distanceTo(post) > 6) await walkTo(bot, post.x, post.z, 3);
         if (food && bot.food < 20) {
             await withTimeout(bot, consume(bot, food), 6000);
             return `hurt: ate ${food}`;
@@ -219,7 +244,13 @@ async function patrolStep(bot, center, radius) {
         && Math.abs(e.position.y - bot.entity.position.y) < 8, 32);
     const threats = world.getNearbyEntities(bot, 12).filter(e => mc.isHostile(e) && !NEUTRAL.includes(e.name)).length;
     const hurt = bot.health < 12;
-    if (enemy && !(hurt && threats > 1) && !(enemy.name === 'creeper' && bot.health < 10)) {
+    // a witch heals itself and throws harming potions: at less than full-ish health that trade is lost (two of
+    // the guard's deaths were "killed by Witch using magic"). Leave it be until patched up.
+    // a ravager has a hundred health and hits for most of a guard's: it killed this one fourteen times in a raid.
+    // Left alone it wrecks the village slowly; fought, it ends the guard at once. Leave it.
+    const tooRisky = (enemy?.name === 'creeper' && bot.health < 10) || (enemy?.name === 'witch' && bot.health < 16)
+        || enemy?.name === 'ravager';
+    if (enemy && !(hurt && threats > 1) && !tooRisky) {
         // attackEntity counts a mob out of 24 blocks as killed: a creeper across the area was "killed" 83 times
         // while the guard stood still and zombies took it apart. Close in first.
         if (enemy.position.distanceTo(bot.entity.position) > 16) {
