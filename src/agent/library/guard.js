@@ -19,7 +19,16 @@ const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken
     'cooked_salmon', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'cooked_rabbit'];
 
 function stats(bot) {
-    bot.guardStats ??= { kills: {}, torches: 0, round: 0 };
+    if (!bot.guardStats) {
+        bot.guardStats = { kills: {}, torches: 0, round: 0 };
+        // Every hostile that dies beside the guard counts for the night's tally, whoever struck the blow: most
+        // of the fighting is done by the self-defence reflex, and a night of seventeen kills was reported as none.
+        bot.on('entityDead', entity => {
+            if (!mc.isHostile(entity) || NEUTRAL.includes(entity.name)) return;
+            if (entity.position.distanceTo(bot.entity.position) > 10) return; // something else's kill, elsewhere
+            bot.guardStats.kills[entity.name] = (bot.guardStats.kills[entity.name] ?? 0) + 1;
+        });
+    }
     return bot.guardStats;
 }
 
@@ -167,8 +176,8 @@ export async function patrol(bot, center, radius = 24) {
             return `closed in on ${enemy.name}`;
         }
         log(bot, `Engaging ${enemy.name} at ${enemy.position.floored()}.`);
-        // counted only when the game says it died: attackEntity also returns once the mob is out of sight, and
-        // counting that made a night's tally read 401 skeletons
+        // whether it died is what the game says, not what attackEntity returns: that also comes back when the
+        // mob is merely out of sight, and counting those made a night's tally read 401 skeletons
         let died = false;
         const onDead = entity => { if (entity.id === enemy.id) died = true; };
         bot.on('entityDead', onDead);
@@ -177,12 +186,8 @@ export async function patrol(bot, center, radius = 24) {
         } finally {
             bot.removeListener('entityDead', onDead);
         }
-        const killed = died;
-        if (killed) {
-            s.kills[enemy.name] = (s.kills[enemy.name] ?? 0) + 1;
-            log(bot, `Defeated ${enemy.name}.`);
-        }
-        return killed ? `defeated ${enemy.name}` : `fought ${enemy.name}`;
+        if (died) log(bot, `Defeated ${enemy.name}.`);
+        return died ? `defeated ${enemy.name}` : `fought ${enemy.name}`;
     }
 
     // 2. hurt: back to the post and eat
