@@ -91,13 +91,61 @@ function threatNear(bot) {
 async function walkTo(bot, x, z, range) {
     const y = groundAt(bot, Math.floor(x), Math.floor(z), Math.floor(bot.entity.position.y));
     if (y === null) return; // water, lava, or a column not loaded: not a place to stand. The next point will do
-    const goal = new pf.goals.GoalNear(x, y, z, range);
-    const watch = setInterval(() => { if (threatNear(bot)) bot.pathfinder.stop(); }, 400);
+    await goWatched(bot, new pf.goals.GoalNear(x, y, z, range), true);
+}
+
+/**
+ * Walk to a goal, giving it up when the loop asks the action to stop, and (with `forThreats`) when something
+ * turns up to fight. Without the first, a patrol across a village kept the agent walking through the ten
+ * seconds Mindcraft allows an action to stop in, and it was killed and restarted six times in one night.
+ */
+async function goWatched(bot, goal, forThreats = false) {
+    const watch = setInterval(() => {
+        if (bot.interrupt_code || (forThreats && threatNear(bot))) {
+            bot.pathfinder.setGoal(null);
+            bot.pathfinder.stop();
+        }
+    }, 250);
     try {
         await goToGoal(bot, goal).catch(() => {});
     } finally {
         clearInterval(watch);
     }
+}
+
+/**
+ * Put a torch on a dark spot: walk there first, interruptibly. placeBlock walks the last stretch itself with a
+ * pathfinder call that ignores the stop the loop asks for, and a patrol that stopped to light a far corner was
+ * killed and restarted eight times in one night.
+ * @returns {Promise<boolean>}
+ */
+async function lightSpot(bot, spot) {
+    const middle = spot.offset(0.5, 0, 0.5);
+    if (bot.entity.position.distanceTo(middle) > 3) await walkTo(bot, spot.x, spot.z, 2);
+    const away = bot.entity.position.distanceTo(middle);
+    // not where it stands: placeBlock then steps aside with a pathfinder call of its own that ignores the stop
+    if (away < 1.6 || away > 4.5 || bot.interrupt_code) return false;
+    return withTimeout(bot, placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false), 6000);
+}
+
+/**
+ * Give up on a skill that has not finished in time, and stop whatever walking it started. Mindcraft's own
+ * skills run pathfinder calls that do not watch bot.interrupt_code, and an action that will not stop inside ten
+ * seconds has its whole process killed (modes.js cleanKill).
+ * @template T
+ * @param {MinecraftBot} bot
+ * @param {Promise<T>} work
+ * @param {number} ms
+ * @returns {Promise<T | false>}
+ */
+async function withTimeout(bot, work, ms) {
+    let timer = null;
+    const out = await Promise.race([work, new Promise(resolve => { timer = setTimeout(() => resolve(false), ms); })]);
+    if (timer) clearTimeout(timer);
+    if (out === false) {
+        try { bot.pathfinder.setGoal(null); bot.pathfinder.stop(); } catch { /* not walking */ }
+    }
+    return /** @type {T | false} */ (out);
 }
 
 /**
@@ -108,6 +156,16 @@ async function walkTo(bot, x, z, range) {
  * @returns {Promise<string>} what it did
  */
 export async function patrol(bot, center, radius = 24) {
+    // One step of guarding, and never longer than eight seconds: Mindcraft kills the whole agent process when an
+    // action will not stop within ten (modes.js cleanKill), and a walk across the village took longer than that,
+    // which cost the guard six restarts in a night (and with them its night tally and its post).
+    const step = patrolStep(bot, center, radius);
+    const out = await withTimeout(bot, step, 8000);
+    return out === false ? 'still going; will pick it up next step' : out;
+}
+
+async function patrolStep(bot, center, radius) {
+    if (bot.interrupt_code) return 'stopped';
     const s = stats(bot);
     const post = new Vec3(center.x, center.y, center.z);
     await wearGear(bot);
@@ -136,10 +194,10 @@ export async function patrol(bot, center, radius = 24) {
         const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
         if (bot.entity.position.distanceTo(post) > 6) await walkTo(bot, post.x, post.z, 3);
         if (food && bot.food < 20) {
-            await consume(bot, food);
+            await withTimeout(bot, consume(bot, food), 6000);
             return `hurt: ate ${food}`;
         }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500));
         return 'hurt: holding back';
     }
 
@@ -148,7 +206,7 @@ export async function patrol(bot, center, radius = 24) {
     const close = world.getNearestEntityWhere(bot, e => mc.isHostile(e) && !NEUTRAL.includes(e.name), 10);
     if (!close && !raider && bot.inventory.items().some(item => item.name === 'torch')) {
         const spot = darkSpot(bot, post, radius);
-        if (spot && await placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
+        if (spot && await lightSpot(bot, spot)) {
             s.torches++;
             return `lit ${spot}`;
         }
@@ -169,7 +227,7 @@ export async function patrol(bot, center, radius = 24) {
             const shielded = RANGED.includes(enemy.name) && bot.inventory.slots[45]?.name === 'shield';
             if (shielded) { bot.lookAt(enemy.position.offset(0, 1.4, 0), true).catch(() => {}); bot.activateItem(true); }
             try {
-                await goToGoal(bot, new pf.goals.GoalNear(enemy.position.x, enemy.position.y, enemy.position.z, 4)).catch(() => {});
+                await goWatched(bot, new pf.goals.GoalNear(enemy.position.x, enemy.position.y, enemy.position.z, 4));
             } finally {
                 if (shielded) bot.deactivateItem();
             }
@@ -195,7 +253,7 @@ export async function patrol(bot, center, radius = 24) {
         if (Math.hypot(bot.entity.position.x - post.x, bot.entity.position.z - post.z) > 4) await walkTo(bot, post.x, post.z, 2); // the post's own height is where the bot stood (a tree top at spawn)
         const food = FOOD.find(name => bot.inventory.items().some(item => item.name === name));
         if (food && bot.food < 20) {
-            await consume(bot, food);
+            await withTimeout(bot, consume(bot, food), 6000);
             return `ate ${food}`;
         }
         if (bot.health < 12) return 'resting at the post';
@@ -204,7 +262,7 @@ export async function patrol(bot, center, radius = 24) {
     // 3. a dark spot nearby: light it so nothing spawns there
     if (bot.inventory.items().some(item => item.name === 'torch')) {
         const spot = darkSpot(bot, post, radius);
-        if (spot && await placeBlock(bot, 'torch', spot.x, spot.y, spot.z, 'bottom', true).catch(() => false)) {
+        if (spot && await lightSpot(bot, spot)) {
             s.torches++;
             return `lit ${spot}`;
         }

@@ -1066,8 +1066,21 @@ export async function consume(bot, itemName="") {
         log(bot, `You do not have any ${name} to eat.`);
         return false;
     }
+    // mindcraft fork: a raised shield (the guard holds one up while closing on archers) blocks eating for good:
+    // 147 meals in a row ended in "Promise timed out" and the bot never got its health back.
+    bot.deactivateItem();
     await bot.equip(item, 'hand');
-    await bot.consume();
+    // eating that is interrupted (a hit while the bar fills) never settles, and an action that will not stop
+    // within ten seconds has its whole process killed (modes.js cleanKill). Four seconds is a whole meal.
+    const eaten = await Promise.race([
+        bot.consume().then(() => true, () => false),
+        new Promise(resolve => setTimeout(() => resolve(false), 4000)),
+    ]);
+    if (!eaten) {
+        bot.deactivateItem();
+        log(bot, `Could not finish eating ${item.name}.`);
+        return false;
+    }
     log(bot, `Consumed ${item.name}.`);
     return true;
 }
@@ -1183,12 +1196,20 @@ export async function goToGoal(bot, goal) {
     const doorCheckInterval = startDoorInterval(bot);
 
     bot.pathfinder.setMovements(final_movements);
+    // mindcraft fork: a walk must end when the loop asks the action to stop. Without this the pathfinder kept
+    // going through the ten seconds Mindcraft allows, and killed the agent process (modes.js cleanKill).
+    const stopWatch = setInterval(() => {
+        if (!bot.interrupt_code) return;
+        try { bot.pathfinder.setGoal(null); } catch { /* not walking */ }
+    }, 250);
     try {
         await bot.pathfinder.goto(goal);
+        clearInterval(stopWatch);
         clearInterval(doorCheckInterval);
         return true;
     } catch (err) {
         clearInterval(doorCheckInterval);
+        clearInterval(stopWatch);
         // mindcraft fork: stuck up high (players spawn on tree tops; a savanna has cliffs) the only way on is a
         // drop deeper than the pathfinder's safe four blocks. With health to spare, take the fall damage.
         const deeper = deeperDropAllowed(bot);
