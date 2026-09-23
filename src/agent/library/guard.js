@@ -182,8 +182,9 @@ async function patrolStep(bot, center, radius) {
 
     // a raid gathers at the edge of the village, 85-95 blocks from where /locate puts it, and comes for the
     // villagers: raiders are met out there and first (a guard lit torches through a raid while they gathered)
-    const raiders = Object.values(bot.entities).filter(e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + INTERCEPT)
+    const raidersAround = Object.values(bot.entities).filter(e => RAIDERS.includes(e.name)
         && Math.abs(e.position.y - bot.entity.position.y) < 16 && e.position.distanceTo(bot.entity.position) < 100);
+    const raiders = raidersAround.filter(e => inArea(e.position, post, radius + INTERCEPT));
     // the one nearest a villager first: the raid is only dangerous where the villagers are, and a guard that
     // took them in the order it met them lost four of five while it worked through the ones by the wall
     const villagers = Object.values(bot.entities).filter(e => e.name === 'villager');
@@ -300,8 +301,10 @@ async function patrolStep(bot, center, radius) {
     }
 
     // 4. villagers to guard: stand with them rather than walk the round, and never leave them while a raid is
-    // on. Going out to finish off the last raiders once things went quiet was tried and lost all five villagers
-    // while the guard was away (it killed nine and came back to an empty village). What a raid costs is villagers, and
+    // on. Going out to finish off the last raiders once things went quiet was tried with one guard and lost all
+    // five villagers while it was away (it killed nine and came back to an empty village). A second guard
+    // that went out while this one held the village was tried too: it never found the raiders holding off, and
+    // that run lost three villagers to what came in behind it. What a raid costs is villagers, and
     // three tactics measured over one raid each say so plainly: meeting the raiders out at the edge left one
     // villager of five (19 kills), meeting them at the edge of the round left one of five (7 kills), standing
     // with them left all five alive with the guard unhurt (10 kills).
