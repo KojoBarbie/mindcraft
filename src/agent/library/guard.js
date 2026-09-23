@@ -11,6 +11,9 @@ import { attackEntity, consume, goToGoal, log, placeBlock, wearGear } from './sk
 const WAYPOINTS = 8;
 const NEUTRAL = ['enderman', 'zombified_piglin', 'piglin', 'spider_jockey_rider'];
 const RAIDERS = ['pillager', 'vindicator', 'evoker', 'ravager', 'illusioner', 'vex', 'witch'];
+// how far past the round raiders are met. Far out it leaves the village open behind it; this is the distance
+// at which it still goes out to meet one, when there are no villagers to stand with.
+const INTERCEPT = Number(process.env.GUARD_INTERCEPT ?? 32);
 const RANGED = ['pillager', 'skeleton', 'stray', 'bogged', 'witch', 'illusioner', 'drowned'];
 const FOOD = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'bread', 'baked_potato', 'cooked_cod',
     'cooked_salmon', 'apple', 'carrot', 'beef', 'porkchop', 'mutton', 'rabbit', 'cooked_rabbit'];
@@ -110,7 +113,7 @@ export async function patrol(bot, center, radius = 24) {
 
     // a raid gathers at the edge of the village, 85-95 blocks from where /locate puts it, and comes for the
     // villagers: raiders are met out there and first (a guard lit torches through a raid while they gathered)
-    const raiders = Object.values(bot.entities).filter(e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + 56)
+    const raiders = Object.values(bot.entities).filter(e => RAIDERS.includes(e.name) && inArea(e.position, post, radius + INTERCEPT)
         && Math.abs(e.position.y - bot.entity.position.y) < 16 && e.position.distanceTo(bot.entity.position) < 100);
     // the one nearest a villager first: the raid is only dangerous where the villagers are, and a guard that
     // took them in the order it met them lost four of five while it worked through the ones by the wall
@@ -200,6 +203,20 @@ export async function patrol(bot, center, radius = 24) {
             s.torches++;
             return `lit ${spot}`;
         }
+    }
+
+    // 4. villagers to guard: stand with them rather than walk the round. What a raid costs is villagers, and
+    // three tactics measured over one raid each say so plainly: meeting the raiders out at the edge left one
+    // villager of five (19 kills), meeting them at the edge of the round left one of five (7 kills), standing
+    // with them left all five alive with the guard unhurt (10 kills).
+    if (villagers.length > 0) {
+        const mid = villagers.reduce((v, e) => v.plus(e.position), new Vec3(0, 0, 0)).scaled(1 / villagers.length);
+        if (bot.entity.position.distanceTo(mid) > 6) {
+            await walkTo(bot, mid.x, mid.z, 3);
+            return `with the villagers at ${mid.floored()}`;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return 'standing with the villagers';
     }
 
     // 4. on to the next point of the round

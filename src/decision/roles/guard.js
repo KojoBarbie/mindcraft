@@ -109,7 +109,7 @@ export function createGuardRole(options = {}) {
 
             // a fight on hand comes before any errand: a raid comes by day, and a guard sent for torches left six
             // raiders in the village for ten minutes
-            const underAttack = (snapshot.entities ?? []).some(e => e.kind === 'hostile' && e.dist < radius + 56);
+            const underAttack = (snapshot.entities ?? []).some(e => e.kind === 'hostile' && e.dist < radius + 32);
             // by day, get what the night needs; by night, make do with what there is
             if (!night && !(ready && underAttack)) {
                 const inv = snapshot.inventory;
