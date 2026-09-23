@@ -659,7 +659,10 @@ export class TacticalLoop {
         // anything is stopped, or the loop stops a command at dusk only to start another one next tick.
         const bot = this.agent.bot;
         const feet = bot.entity?.position?.floored?.();
-        if (!this.sheltered && feet && !this.enclosed() && hasCover(pos => bot.blockAt(pos), feet)) return false;
+        // A roof of rock is not safety when something is already down there with it: a miner that carried on
+        // under cover died ten times in one night to what spawns in a cave. Then it digs in like anywhere else.
+        const mobNear = (raw.entities ?? []).some(e => e.kind === 'hostile' && e.dist < 16);
+        if (!this.sheltered && feet && !this.enclosed() && !mobNear && hasCover(pos => bot.blockAt(pos), feet)) return false;
 
         const label = this.agent.actions.currentActionLabel || '';
         const ours = !label || label.startsWith('action:'); // not a reflex (mode:*)
