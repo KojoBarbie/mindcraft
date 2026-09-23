@@ -235,6 +235,9 @@ export class TacticalLoop {
         /** the last error a tick threw, and how many ticks in a row threw it */
         this.lastError = '';
         this.errorStreak = 0;
+        /** meals in a row that did not go down; after a few the loop stops trying for a minute */
+        this.healFailures = 0;
+        this.healFailedAt = 0;
 
         this.running = false;
         this.deciding = false;
@@ -481,10 +484,13 @@ export class TacticalLoop {
         // at 12-15: a miner went about at 5 health for most of a day with five porkchops, and died of it.
         if (!this.pendingCommand && this.agent.isIdle()) {
             const raw = this.rawSnapshot();
-            const meal = mealToHeal(raw, this.data.isFood);
+            if (raw.hp >= 14) this.healFailures = 0; // back on its feet: meals are landing again
+            const meal = this.healFailures >= 3 && Date.now() - (this.healFailedAt ?? 0) < 60_000 ? null : mealToHeal(raw, this.data.isFood);
             if (meal) {
                 this.onEvent({ type: 'heal', detail: { hp: raw.hp, food: raw.food, meal } });
                 this.lastDecisionAt = Date.now();
+                this.healFailedAt = Date.now();
+                this.healFailures = (this.healFailures ?? 0) + 1; // reset below once a meal actually lands
                 this.run(`!consume("${meal}")`, -1, this.progressSignature(raw), epoch, false);
                 return;
             }
@@ -494,6 +500,7 @@ export class TacticalLoop {
         if (this.role) {
             const busyWithRole = this.pendingCommand && ROLE_COMMANDS.some(c => this.pendingCommand.startsWith(c));
             if (busyWithRole) return;
+            if (this.agent.actions?.stopping > 0) return; // a stop is waiting: starting now would keep it waiting
             if (!this.pendingCommand && this.agent.isIdle()) {
                 const raw = this.rawSnapshot();
                 const command = this.role.step(this, raw, this.data.isFood);

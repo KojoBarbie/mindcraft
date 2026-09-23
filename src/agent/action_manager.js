@@ -9,6 +9,10 @@ export class ActionManager {
         this.resume_name = '';
         this.last_action_time = 0;
         this.recent_action_counter = 0;
+        // mindcraft fork: how many stop() calls are waiting. A role that issues a short action every couple of
+        // seconds (the guard's !patrol) kept starting the next one while a stop was still waiting for "executing"
+        // to fall, so the stop never finished and cleanKill took the whole process down after ten seconds.
+        this.stopping = 0;
     }
 
     async resumeAction(actionFn, timeout) {
@@ -25,15 +29,20 @@ export class ActionManager {
 
     async stop() {
         if (!this.executing) return;
+        this.stopping++;
         const timeout = setTimeout(() => {
             this.agent.cleanKill('Code execution refused stop after 10 seconds. Killing process.');
         }, 10000);
-        while (this.executing) {
-            this.agent.requestInterrupt();
-            console.log('waiting for code to finish executing...');
-            await new Promise(resolve => setTimeout(resolve, 300));
+        try {
+            while (this.executing) {
+                this.agent.requestInterrupt();
+                console.log('waiting for code to finish executing...');
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+        } finally {
+            clearTimeout(timeout);
+            this.stopping--;
         }
-        clearTimeout(timeout);
     } 
 
     cancelResume() {
@@ -88,6 +97,9 @@ export class ActionManager {
                 console.log(`action "${actionLabel}" trying to interrupt current action "${this.currentActionLabel}"`);
             }
             await this.stop();
+            // let any other stop() that is still waiting see "executing" false and finish, or it waits for this
+            // action instead and kills the process
+            while (this.stopping > 0) await new Promise(resolve => setTimeout(resolve, 50));
 
             // clear bot logs and reset interrupt code
             this.agent.clearBotLogs();
