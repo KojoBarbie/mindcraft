@@ -123,10 +123,17 @@ const modes_list = [
                 say(agent, 'I\'m stuck!');
                 this.stuck_time = 0;
                 execute(this, agent, async () => {
-                    const crashTimeout = setTimeout(() => { agent.cleanKill("Got stuck and couldn't get unstuck") }, 10000);
-                    await skills.moveAway(bot, 5);
+                    // mindcraft fork: walking away is not always possible (a shelter shaft, a one-block gap in a
+                    // mine). Dig a way out before giving up on the whole process, which costs the agent its
+                    // action and a restart; the kill stays as the last resort.
+                    const crashTimeout = setTimeout(() => { agent.cleanKill("Got stuck and couldn't get unstuck") }, 20000);
+                    let free = await skills.moveAway(bot, 5);
+                    if (!free) {
+                        const { digOut } = await import('./library/mining.js');
+                        if (await digOut(bot)) free = await skills.moveAway(bot, 4);
+                    }
                     clearTimeout(crashTimeout);
-                    say(agent, 'I\'m free.');
+                    say(agent, free ? 'I\'m free.' : 'Still stuck; carrying on.');
                 });
             }
             this.last_time = Date.now();

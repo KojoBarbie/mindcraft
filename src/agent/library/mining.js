@@ -15,6 +15,7 @@ export const WANTED_ORES = [
 const SIDES = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
 /** yaw-free headings: +x, +z, -x, -z */
 const HEADINGS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+const UNBREAKABLE = ['bedrock', 'obsidian', 'water', 'lava'];
 
 function isLiquid(block) {
     return !!block && LIQUIDS.includes(block.name);
@@ -293,4 +294,32 @@ async function branchMineOnce(bot, center = null, radius = 48, branchLength = 12
     const diamonds = bot.inventory.items().filter(item => item.name === 'diamond').reduce((n, item) => n + item.count, 0);
     log(bot, `Branch mined ${dug} blocks around ${junction}.${summarise(found)} Holding ${diamonds} diamond.`);
     return dug;
+}
+
+/**
+ * mindcraft fork: dig a way out from where the bot stands. The unstuck reflex only walks away, and in a hole or
+ * a one-block gap there is nowhere to walk: the agent's whole process was killed instead (modes.js cleanKill).
+ * @param {MinecraftBot} bot
+ * @returns {Promise<boolean>} true if anything was dug
+ */
+export async function digOut(bot) {
+    const feet = bot.entity.position.floored();
+    let dug = 0;
+    for (const [dx, dz] of HEADINGS) {
+        for (const dy of [0, 1]) {
+            const block = bot.blockAt(feet.offset(dx, dy, dz));
+            if (!solid(block) || UNBREAKABLE.includes(block.name)) continue;
+            await bot.tool.equipForBlock(block).catch(() => {});
+            if (await bot.dig(block, true).then(() => true, () => false)) dug++;
+        }
+        if (dug > 0) break; // one side is enough to step through
+    }
+    if (dug === 0) { // walled in from the sides: up and out
+        const above = bot.blockAt(feet.offset(0, 2, 0));
+        if (solid(above) && !UNBREAKABLE.includes(above.name)) {
+            await bot.tool.equipForBlock(above).catch(() => {});
+            if (await bot.dig(above, true).then(() => true, () => false)) dug++;
+        }
+    }
+    return dug > 0;
 }
