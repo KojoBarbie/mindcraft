@@ -61,9 +61,15 @@ class MindServerProxy {
             this.agent.cleanKill();
         });
 		
-        this.socket.on('send-message', (data) => {
+        this.socket.on('send-message', async (data) => {
             try {
-                this.agent.respondFunc(data.from, data.message);
+                // mindcraft fork: respondFunc only exists once the bot has spawned, and a message sent before
+                // that threw "respondFunc is not a function" and was lost. A benchmark that posted its task the
+                // moment the agent started never had it taken up at all. Wait for the agent to be ready.
+                for (let waited = 0; !this.agent.respondFunc && waited < 120_000; waited += 500)
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                if (!this.agent.respondFunc) throw new Error('the agent did not become ready for messages');
+                await this.agent.respondFunc(data.from, data.message);
             } catch (error) {
                 console.error('Error: ', JSON.stringify(error, Object.getOwnPropertyNames(error)));
             }
